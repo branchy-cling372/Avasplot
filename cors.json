@@ -1,0 +1,12 @@
+[
+  {
+    "origin": [
+      "https://avas-845aa.web.app",
+      "https://avas-845aa.firebaseapp.com",
+      "http://localhost:5000",
+      "http://127.0.0.1:5000"
+    ],
+    "method": ["GET", "PUT", "POST", "DELETE"],
+    "maxAgeSeconds": 3600
+  }
+]

@@ -1,0 +1,3093 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="color-scheme" content="dark"/>
+  <title>Avas - AI-Powered Nationwide Plot Search</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  
+  <script type="module">
+    // Import the functions you need from the SDKs you need
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { 
+      getAuth, 
+      onAuthStateChanged, 
+      fetchSignInMethodsForEmail,
+      createUserWithEmailAndPassword,
+      signInWithEmailAndPassword,
+      updateProfile,
+      signOut,
+      GoogleAuthProvider,
+      signInWithPopup
+    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+    import { 
+      getFirestore, 
+      collection, 
+      doc,
+      setDoc,
+      getDoc,
+      addDoc, 
+      query, 
+      where, 
+      serverTimestamp,
+      onSnapshot,
+      updateDoc 
+    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+    import { 
+      getStorage, 
+      ref, 
+      uploadBytesResumable,
+      getDownloadURL
+    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+    import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
+    
+    // Your web app's Firebase configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyDJ83sXD54rAmhw3XtkZwioI_lvw75BxU4",
+      authDomain: "avas-845aa.firebaseapp.com",
+      databaseURL: "https://avas-845aa-default-rtdb.firebaseio.com",
+      projectId: "avas-845aa",
+      storageBucket: "avas-845aa.appspot.com",
+      messagingSenderId: "1058171170402",
+      appId: "1:1058171170402:web:4e421d16f1ae2bfbddab3b",
+      measurementId: "G-F9WF2PYEVN"
+    };
+
+    // Initialize Firebase
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const storage = getStorage(app);
+    const functions = getFunctions(app);
+
+    const state = {
+        allPlots: [],
+        currentUser: null,
+        currentUserProfile: null,
+        activeFilter: 'all', // 'all' or 'mine'
+        activePropertyType: 'Plots',
+        activeListingType: 'Buy',
+        selectedPlotIds: new Set(),
+        selectedPosition: { lat: 18.5913, lng: 73.7423 },
+        priceChart: null,
+        loginVisualId: null,
+        contextPlot: null,
+        plan: localStorage.getItem('avas_plan') || 'free',
+        googleMapsReady: false, 
+        googleMapsPromise: null,
+        googleMapsResolve: null,
+        apiKeys: {
+        google: "AIzaSyBBhQ3gFeuabpKa-3OsPXreAkwfMM66eq8",
+        },
+        unsubscribePlots: null,
+    };
+
+    let dom; 
+
+    document.addEventListener('DOMContentLoaded', () => {
+        dom = {
+            header: document.querySelector('header'),
+            plotGrid: document.getElementById('plot-grid'),
+            citySearchForm: document.getElementById('city-search-form'),
+            searchTabs: document.getElementById('search-tabs'),
+            compareBtn: document.getElementById('compare-btn'),
+            summarizeBtn: document.getElementById('summarize-btn'),
+            bestValueBtn: document.getElementById('best-value-btn'),
+            feedbackToast: document.getElementById('feedback-toast'),
+            advertiseBtn: document.getElementById('advertise-btn'),
+            subscriptionBtn: document.getElementById('subscription-btn'),
+            plotsNavLink: document.getElementById('plots-nav-link'),
+            landNavLink: document.getElementById('land-nav-link'),
+            categoryBrowser: document.getElementById('category-browser'),
+            browseHeading: document.getElementById('browse-heading'),
+            modal: {
+                wrapper: document.getElementById('modal-wrapper'),
+                content: document.querySelector('.modal-content'),
+                title: document.getElementById('modal-title'),
+                body: document.getElementById('modal-body'),
+                closeBtn: document.getElementById('modal-close-btn'),
+            },
+            auth: {
+                container: document.getElementById('auth-container'),
+                loginBtn: document.getElementById('login-btn'),
+                userProfileContainer: document.getElementById('user-profile-container'),
+                addPlotBtn: document.getElementById('add-plot-btn'),
+            },
+            chat: {},
+        };
+        
+        setupEventListeners();
+        loadGoogleMaps();
+        renderCategories();
+        updateActiveNavLinks();
+        updateAdRibbon();
+        initScrollAnimations();
+        handleAuthStateChange();
+    });
+
+    function setupEventListeners() {
+        window.addEventListener('scroll', () => {
+            if (dom) dom.header.classList.toggle('scrolled', window.scrollY > 50);
+        });
+        
+        dom.modal.closeBtn.addEventListener('click', closeModal);
+        dom.modal.wrapper.addEventListener('click', e => { if (e.target === dom.modal.wrapper) closeModal(); });
+
+        dom.citySearchForm.addEventListener('submit', performSearch);
+        
+        dom.searchTabs.addEventListener('click', e => {
+            if (!e.target.matches('.hero-search-tab')) return;
+            const type = e.target.dataset.type;
+            if (type === 'Sell') { openAddPlotModalGuarded(); return; }
+            state.activeListingType = type;
+            dom.searchTabs.querySelectorAll('.hero-search-tab').forEach(t => t.classList.remove('active'));
+            e.target.classList.add('active');
+            renderFilteredPlots();
+        });
+
+        dom.categoryBrowser.addEventListener('click', e => {
+            const card = e.target.closest('.category-card'); if (!card) return;
+            const category = card.dataset.category;
+              if (category === 'Land') {
+                state.activePropertyType = 'Land';
+              } else {
+                state.activePropertyType = 'Plots';
+              }
+              renderFilteredPlots();
+              updateActiveNavLinks();
+        });
+        
+        dom.plotsNavLink.addEventListener('click', e => { e.preventDefault(); state.activeFilter = 'all'; state.activePropertyType = 'Plots'; updateActiveNavLinks(); listenForPlots(); });
+        dom.landNavLink.addEventListener('click', e => { e.preventDefault(); state.activeFilter = 'all'; state.activePropertyType = 'Land'; updateActiveNavLinks(); listenForPlots(); });
+        
+        dom.plotGrid.addEventListener('change', e => {
+            if (!e.target.classList.contains('select-plot-checkbox')) return;
+            const id = e.target.dataset.id;
+            if (e.target.checked) {
+                if (state.selectedPlotIds.size < 2) {
+                    state.selectedPlotIds.add(id);
+                } else {
+                    e.target.checked = false;
+                    showFeedbackToast('Select up to 2 plots only.', 'bg-red-500');
+                }
+            } else {
+                state.selectedPlotIds.delete(id);
+            }
+            updateAiActionButtons();
+        });
+        
+        // Combined plot grid click listener
+        dom.plotGrid.addEventListener('click', e => {
+            if (e.target.matches('.mark-as-sold-btn')) {
+                const plotId = e.target.dataset.id;
+                if (confirm('Are you sure you want to mark this property as sold?')) {
+                    updatePlotStatus(plotId, 'sold');
+                }
+            }
+            if (e.target.matches('.mark-as-rented-btn')) {
+                const plotId = e.target.dataset.id;
+                if (confirm('Are you sure you want to mark this property as rented?')) {
+                    updatePlotStatus(plotId, 'rented');
+                }
+            }
+            if (e.target.matches('.mark-as-available-btn')) {
+                const plotId = e.target.dataset.id;
+                if (confirm('Are you sure you want to make this property available again?')) {
+                    updatePlotStatus(plotId, 'available');
+                }
+            }
+            if (e.target.closest('.ask-ai-btn')) {
+                e.stopPropagation();
+                const button = e.target.closest('.ask-ai-btn');
+                setChatContext(button.dataset.id);
+            }
+            // Logic for the new edit button
+            if (e.target.closest('.edit-plot-btn')) {
+                e.stopPropagation();
+                const plotId = e.target.closest('.edit-plot-btn').dataset.id;
+                openEditPlotModal(plotId);
+            }
+        });
+
+        dom.compareBtn.addEventListener('click', handleCompareClick);
+        dom.summarizeBtn.addEventListener('click', handleSummarizeClick);
+        dom.bestValueBtn.addEventListener('click', handleBestValueClick);
+
+        dom.advertiseBtn.addEventListener('click', openAdvertiseModal);
+        dom.subscriptionBtn?.addEventListener('click', openSubscriptionModal);
+        dom.auth.loginBtn?.addEventListener('click', openLoginModal);
+        dom.auth.addPlotBtn?.addEventListener('click', openAddPlotModalGuarded);
+    }
+
+    async function updatePlotStatus(plotId, newStatus) {
+      if (!plotId || !newStatus) return;
+      const statusText = newStatus === 'available' ? 'available' : (newStatus === 'sold' ? 'sold' : 'rented');
+      showFeedbackToast(`Marking as ${statusText}...`, 'bg-blue-500');
+      const plotDocRef = doc(db, 'plots', plotId);
+      try {
+        await updateDoc(plotDocRef, {
+          status: newStatus
+        });
+        showFeedbackToast(`Property marked as ${statusText}!`, 'bg-green-600');
+      } catch (error) {
+        console.error(`Error marking plot as ${statusText}:`, error);
+        showFeedbackToast('An error occurred. Please try again.', 'bg-red-500');
+      }
+    }
+
+    function initScrollAnimations() {
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('in-view');
+                    observer.unobserve(entry.target);
+                }
+            });
+        }, { threshold: 0.1 });
+        document.querySelectorAll('.animate-on-scroll').forEach(el => observer.observe(el));
+    }
+
+    function performSearch(e) {
+        if(e) e.preventDefault();
+        renderFilteredPlots();
+    }
+    
+    onAuthStateChanged(auth, async (user) => {
+      state.currentUser = user;
+      if (user) {
+          const userDocRef = doc(db, 'users', user.uid);
+          const userDocSnap = await getDoc(userDocRef);
+          if (userDocSnap.exists()) {
+              state.currentUserProfile = userDocSnap.data();
+          }
+          if (!state.currentUserProfile || !state.currentUserProfile.role) {
+                openRoleSelectionModal();
+          }
+      } else {
+          state.currentUserProfile = null;
+      }
+      handleAuthStateChange();
+      listenForPlots();
+    });
+
+    function listenForPlots() {
+      if (state.unsubscribePlots) {
+        state.unsubscribePlots();
+      }
+      showGridLoader();
+
+      let plotsQuery = query(collection(db, 'plots'));
+      
+      if (state.activeFilter === 'mine' && state.currentUser) {
+          plotsQuery = query(plotsQuery, where("owner_id", "==", state.currentUser.uid));
+      }
+      
+      state.unsubscribePlots = onSnapshot(plotsQuery, (snapshot) => {
+        state.allPlots = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+          created_at: doc.data().created_at?.toDate().toISOString() || new Date().toISOString()
+        }));
+        renderFilteredPlots();
+      }, (error) => {
+        console.error("Failed to fetch plots from Firestore:", error);
+        dom.plotGrid.innerHTML = `<div class="col-span-full text-center py-10"><i class="ph-bold ph-warning-circle text-6xl text-red-500 mb-4"></i><p class="text-slate-400">Could not fetch plots. Check your security rules and console.</p></div>`;
+      });
+    }
+
+    function renderFilteredPlots() {
+        const searchQuery = dom.citySearchForm.querySelector('input').value.trim();
+        dom.browseHeading.textContent = state.activeFilter === 'mine' ? 'My Listings' : (searchQuery ? `Showing Results for "${searchQuery}"` : 'Featured Listings');
+        state.selectedPlotIds.clear();
+        updateAiActionButtons();
+
+        let filteredPlots = [...state.allPlots];
+        
+        if (searchQuery) {
+            const lowerQuery = searchQuery.toLowerCase();
+            filteredPlots = filteredPlots.filter(p =>
+                p.city?.toLowerCase().includes(lowerQuery) ||
+                p.location?.toLowerCase().includes(lowerQuery)
+            );
+        }
+
+        if (state.activeListingType === 'Buy') {
+            filteredPlots = filteredPlots.filter(p => p.listing_type !== 'For Rent');
+        } else if (state.activeListingType === 'Rent') {
+            filteredPlots = filteredPlots.filter(p => p.listing_type === 'For Rent');
+        }
+        
+        if (state.activePropertyType === 'Land') filteredPlots = filteredPlots.filter(p => ['Agricultural', 'NA Plot'].includes(p.property_type));
+        
+        const sortedPlots = filteredPlots.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        renderPlotCards(sortedPlots);
+    }
+    
+    function renderPlotCards(plots) {
+        dom.plotGrid.innerHTML = '';
+        if (plots.length === 0) {
+            const message = state.activeFilter === 'mine' 
+                ? "You haven't listed any plots yet." 
+                : "No plots found for this criteria.";
+            dom.plotGrid.innerHTML = `<div class="col-span-full text-center py-10"><i class="ph-bold ph-info text-6xl text-slate-500 mb-4"></i><p class="text-slate-400">${message}</p></div>`;
+            return;
+        }
+
+        const cardTemplate = document.getElementById('plot-card-template').innerHTML;
+        plots.forEach((plot) => {
+            if (!plot.vastu_score) {
+                plot.vastu_score = generateVastuScore(plot.facing, plot.property_type);
+            }
+
+            const timeSince = new Date() - new Date(plot.created_at);
+            const isNew = timeSince < 48 * 60 * 60 * 1000;
+
+            let tagsHtml = '';
+            if (isNew && plot.status === 'available') tagsHtml += '<div class="bg-blue-600/50 text-white px-2 py-1 text-xs font-semibold rounded-full">New</div>';
+            if (plot.is_verified) tagsHtml += '<div class="bg-green-600/50 text-white px-2 py-1 text-xs font-semibold rounded-full flex items-center gap-1"><i class="ph-bold ph-check-circle"></i>Verified</div>';
+            
+            const imageUrl = Array.isArray(plot.image_urls) && plot.image_urls.length > 0 ? plot.image_urls[0] : 'https://placehold.co/600x400/1e293b/e2e8f0?text=No+Image';
+
+            const cardHtml = cardTemplate
+                .replaceAll('{id}', plot.id)
+                .replace('{image_url}', imageUrl)
+                .replace('{location}', plot.location)
+                .replace('{tags}', tagsHtml)
+                .replace('{property_type}', (plot.property_type || '').toUpperCase())
+                .replace('{price}', `₹${formatIndianCurrency(plot.price)}`)
+                .replace('{area_sqft}', plot.area_sqft)
+                .replace('{city}', plot.city);
+            
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = cardHtml;
+            const cardElement = tempDiv.firstElementChild;
+
+           if (state.activeFilter === 'mine') {
+                const actionsContainer = cardElement.querySelector('.owner-actions');
+                if (actionsContainer) {
+                    if (plot.status === 'available') {
+                        let statusButtonHtml = '';
+                        if (plot.listing_type === 'For Rent') {
+                            statusButtonHtml = `<button class="mark-as-rented-btn flex-grow py-2 text-sm bg-cyan-600 text-white font-semibold rounded-lg hover:bg-cyan-700 transition-colors" data-id="${plot.id}">Mark as Rented</button>`;
+                        } else {
+                            statusButtonHtml = `<button class="mark-as-sold-btn flex-grow py-2 text-sm bg-amber-600 text-white font-semibold rounded-lg hover:bg-amber-700 transition-colors" data-id="${plot.id}">Mark as Sold</button>`;
+                        }
+                        
+                        // New layout with Edit button added
+                        actionsContainer.innerHTML = `
+                            <div class="flex gap-2">
+                                ${statusButtonHtml}
+                                <button class="edit-plot-btn p-2 text-sm bg-slate-600 text-white font-semibold rounded-lg hover:bg-slate-700 transition-colors" data-id="${plot.id}" title="Edit Listing">
+                                    <i class="ph-bold ph-pencil-simple leading-none" style="pointer-events: none;"></i>
+                                </button>
+                            </div>`;
+
+                    } else {
+                        const statusText = plot.status === 'sold' ? 'SOLD' : 'RENTED';
+                        actionsContainer.innerHTML = `
+                            <div class="text-center py-2 text-sm font-semibold text-green-400 border border-green-400/50 rounded-md">${statusText}</div>
+                            <button class="mark-as-available-btn w-full mt-2 py-2 text-sm font-semibold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors" data-id="${plot.id}">Make Available Again</button>
+                        `;
+                    }
+                }
+            }
+
+            if (plot.status === 'sold' || plot.status === 'rented') {
+                cardElement.classList.add('sold-card');
+                const imageWrapper = cardElement.querySelector('.plot-card-image-wrapper');
+                if (imageWrapper) {
+                    imageWrapper.onclick = null;
+                }
+                const overlay = document.createElement('div');
+                overlay.className = 'sold-overlay';
+                overlay.innerHTML = `<span>${plot.status.toUpperCase()}</span>`;
+                cardElement.appendChild(overlay);
+            }
+
+            dom.plotGrid.appendChild(cardElement);
+        });
+        initScrollAnimations();
+    }
+    
+    function renderCategories() {
+        const cats = [
+            { name: 'New Listings', image: 'https://images.pexels.com/photos/106399/pexels-photo-106399.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1' },
+            { name: 'Price Reduced', image: 'https://images.pexels.com/photos/209296/pexels-photo-209296.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1' },
+            { name: 'Land', image: 'https://images.pexels.com/photos/209315/pexels-photo-209315.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1' },
+            { name: 'Residential', image: 'https://images.pexels.com/photos/208736/pexels-photo-208736.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1' },
+        ];
+        dom.categoryBrowser.innerHTML = cats.map(cat => `
+        <div class="category-card animate-on-scroll" data-category="${cat.name}">
+          <img src="${cat.image}" alt="${cat.name}">
+          <div class="category-card-overlay">
+              <h3 class="text-white text-lg font-bold">${cat.name}</h3>
+          </div>
+        </div>`).join('');
+    }
+
+    function openModal(title, bodyHtml, options = {}) {
+      const { isFullScreen = false, customClass = '' } = options;
+        dom.modal.title.textContent = title;
+        dom.modal.body.innerHTML = bodyHtml;
+        
+        dom.modal.content.className = `modal-content rounded-2xl shadow-xl transform opacity-0 -translate-y-4 ${customClass}`;
+
+        if (isFullScreen) {
+            dom.modal.content.classList.add('w-screen', 'h-screen', 'rounded-none', 'max-w-full');
+            dom.modal.title.parentElement.classList.add('hidden');
+            dom.modal.body.className = 'p-0 h-full overflow-y-auto';
+        } else {
+            dom.modal.content.classList.add('w-11/12', 'md:max-w-4xl');
+            dom.modal.title.parentElement.classList.remove('hidden');
+            dom.modal.body.className = 'p-6 max-h-[80vh] overflow-y-auto';
+        }
+
+        dom.modal.wrapper.classList.remove('pointer-events-none', 'opacity-0');
+        setTimeout(() => {
+            dom.modal.content.classList.remove('opacity-0', '-translate-y-4');
+        }, 10);
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeModal() {
+        dom.modal.content.classList.add('opacity-0', '-translate-y-4');
+        dom.modal.wrapper.classList.add('opacity-0');
+        setTimeout(() => {
+            if (state.loginVisualId) { cancelAnimationFrame(state.loginVisualId); state.loginVisualId = null; }
+            dom.modal.wrapper.classList.add('pointer-events-none');
+            dom.modal.body.innerHTML = '';
+        }, 300);
+        document.body.style.overflow = '';
+    }
+    
+    function openLoginModal() {
+      openModal('', document.getElementById('new-login-template').innerHTML, { isFullScreen: true });
+      initLoginListeners(); 
+      initLoginIconAnimation();
+    }
+    
+    async function openPlotDetailModal(plotId) {
+        const template = document.getElementById('plot-detail-template').innerHTML;
+        openModal('Plot Details', template, { isFullScreen: true });
+        
+        let plot = state.allPlots.find(p => p.id == plotId);
+
+      if (!plot) {
+        console.error("Could not find plot with ID:", plotId);
+        dom.modal.body.innerHTML = `<p class="p-8 text-center text-red-400">Error: Plot could not be found.</p>`;
+        return;
+    }
+        
+        if (!plot.vastu_score) {
+            plot.vastu_score = generateVastuScore(plot.facing, plot.property_type);
+        }
+
+        const modalBody = dom.modal.body;
+        modalBody.querySelector('#detail-close-btn').addEventListener('click', closeModal);
+
+        const imageUrl = Array.isArray(plot.image_urls) && plot.image_urls.length > 0 ? plot.image_urls[0] : 'https://placehold.co/600x400/1e293b/e2e8f0?text=No+Image';
+        modalBody.querySelector('#plot-detail-img').src = imageUrl;
+        const thumbnailsContainer = modalBody.querySelector('#plot-detail-thumbnails');
+      thumbnailsContainer.innerHTML = '';
+
+    if (Array.isArray(plot.image_urls) && plot.image_urls.length > 1) {
+        plot.image_urls.forEach((url, index) => {
+            const thumb = document.createElement('img');
+            thumb.src = url;
+            thumb.className = 'w-full h-20 object-cover rounded-md cursor-pointer border-2 border-transparent hover:border-indigo-500 transition-all';
+            if (index === 0) {
+                thumb.classList.add('border-indigo-500'); 
+            }
+            thumbnailsContainer.appendChild(thumb);
+        });
+
+        thumbnailsContainer.addEventListener('click', (e) => {
+            if (e.target.tagName === 'IMG') {
+                const mainImage = modalBody.querySelector('#plot-detail-img');
+                mainImage.src = e.target.src;
+
+                thumbnailsContainer.querySelectorAll('img').forEach(img => {
+                    img.classList.remove('border-indigo-500');
+                });
+                e.target.classList.add('border-indigo-500');
+            }
+        });
+    }
+
+    modalBody.querySelector('#plot-detail-location').textContent = plot.location;
+    modalBody.querySelector('#plot-detail-city').textContent = plot.city;
+        modalBody.querySelector('#plot-detail-price').textContent = `₹${formatIndianCurrency(plot.price)}`;
+        modalBody.querySelector('#vastu-score').textContent = `${plot.vastu_score}/100`;
+
+        const badgeEl = modalBody.querySelector('#plot-detail-verified-badge');
+        badgeEl.innerHTML = plot.is_verified
+            ? `<div class="flex items-center gap-1 bg-green-600 text-white text-sm font-bold px-3 py-1 rounded-full"><i class="ph-bold ph-check-circle"></i>Verified</div>`
+            : `<div class="flex items-center gap-1 bg-slate-600 text-white text-sm font-bold px-3 py-1 rounded-full"><i class="ph-bold ph-x-circle"></i>Unverified</div>`;
+        
+        const { growth, chartData } = generatePriceTrend(plot);
+        modalBody.querySelector('#plot-detail-prediction').textContent = `~ ${growth.toFixed(1)}% Increase`;
+
+        const summaryEl = modalBody.querySelector('#ai-summary');
+        summaryEl.innerHTML = '<div class="flex items-center gap-2 text-sm text-slate-400"><div class="w-4 h-4 border-2 border-slate-500 border-t-slate-300 rounded-full animate-spin"></div><span>Generating AI summary...</span></div>';
+        
+        const summaryData = await getAISummary(plot);
+        try {
+            const summary = JSON.parse(summaryData);
+            summaryEl.textContent = summary.verdict || "AI could not generate a summary.";
+        } catch (e) {
+            console.error("Failed to parse AI summary:", e);
+            summaryEl.textContent = "Could not generate AI summary at this time.";
+        }
+
+        renderContactSellerSection(plot);
+
+        await ensureGoogleMapsReady();
+        renderPriceChart(chartData);
+        const lat = plot.latitude ? parseFloat(plot.latitude) : state.selectedPosition.lat;
+        const lng = plot.longitude ? parseFloat(plot.longitude) : state.selectedPosition.lng;
+        initializeMapForModal('neighborhood-map', { lat, lng }, false);
+    }
+
+    function renderContactSellerSection(plot) {
+        const contactSection = dom.modal.body.querySelector('#contact-seller-section');
+        if (!contactSection) return;
+        let contactHtml = '';
+
+        if (state.currentUser) {
+            if (state.plan === 'free') {
+                contactHtml = `
+                    <div class="mt-6 p-4 rounded-lg bg-slate-800/50 border border-amber-500/50 text-center">
+                        <h3 class="text-xl font-bold mb-2 flex items-center justify-center gap-2 text-white"><i class="ph-bold ph-lock text-amber-400"></i>Contact Seller</h3>
+                        <p class="text-sm text-slate-400 mb-4">Upgrade to a premium plan to view seller contact details and send messages directly.</p>
+                        <button id="upgrade-plan-btn" class="w-full py-2 bg-amber-600 text-white font-semibold rounded-lg hover:bg-amber-700 transition-colors">Upgrade Plan</button>
+                    </div>`;
+            } else {
+                contactHtml = `
+                    <div class="mt-6 p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+                        <h3 class="text-xl font-bold mb-2 flex items-center gap-2 text-white"><i class="ph-bold ph-phone text-indigo-400"></i>Contact Seller</h3>
+                        <p class="text-slate-300"><strong>Name:</strong> ${plot.owner_name || 'N/A'}</p>
+                        <p class="text-slate-300"><strong>Email:</strong> ${plot.owner_email || 'N/A'}</p>
+                        <p class="text-slate-300 mb-3"><strong>Phone:</strong> ${plot.contact_phone || 'N/A'}</p>
+                        <a href="mailto:${plot.owner_email}?subject=Inquiry%20about%20plot%20in%20${encodeURIComponent(plot.location)}" class="w-full block text-center py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
+                            <i class="ph-bold ph-envelope"></i> Email Seller
+                        </a>
+                    </div>`;
+            }
+        } else {
+            contactHtml = `
+                <div class="mt-6 p-4 rounded-lg bg-slate-800/50 border border-slate-700 text-center">
+                    <h3 class="text-xl font-bold mb-2 flex items-center justify-center gap-2 text-white"><i class="ph-bold ph-sign-in text-indigo-400"></i>Contact Seller</h3>
+                    <p class="text-sm text-slate-400 mb-4">Please log in to contact the seller.</p>
+                    <button id="login-to-contact-btn" class="w-full py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">Login to Continue</button>
+                </div>`;
+        }
+        contactSection.innerHTML = contactHtml;
+
+        const upgradeBtn = contactSection.querySelector('#upgrade-plan-btn');
+        const loginBtn = contactSection.querySelector('#login-to-contact-btn');
+        if (upgradeBtn) upgradeBtn.addEventListener('click', openSubscriptionModal);
+        if (loginBtn) loginBtn.addEventListener('click', openLoginModal);
+    }
+    
+    async function openAddPlotModal() {
+        openModal('Add a New Plot', document.getElementById('add-plot-template').innerHTML);
+        updateStepIndicator(1);
+        initAddPlotFormListeners();
+    }
+    function createRazorpaySubscription(planId) {
+        alert("Payment functionality is not yet configured.");
+        console.log("Attempted to subscribe to plan:", planId);
+    }
+    function openSubscriptionModal() {
+        openModal('Subscription', document.getElementById('subscription-modal-template').innerHTML);
+        
+        dom.modal.body.querySelector('[data-plan="enterprise"]').addEventListener('click', () => {
+            createRazorpaySubscription('plan_YOUR_ENTERPRISE_PLAN_ID'); 
+        });
+
+        dom.modal.body.querySelector('[data-plan="pro"]').addEventListener('click', () => {
+            createRazorpaySubscription('plan_YOUR_PRO_PLAN_ID'); 
+        });
+
+        dom.modal.body.querySelector('[data-plan="free"]').addEventListener('click', () => {
+            state.plan = 'free';
+            localStorage.setItem('avas_plan', 'free');
+            updateAdRibbon();
+            showFeedbackToast(`Switched to Free plan.`, 'bg-green-600');
+            closeModal();
+        });
+    }
+    
+function openAdvertiseModal() {
+    openModal('Advertise with Us', document.getElementById('advertise-modal-template').innerHTML);
+    const form = dom.modal.body.querySelector('#adv-form');
+    if (state.currentUserProfile) {
+        form.querySelector('#contact_name').value = state.currentUserProfile.name || '';
+        form.querySelector('#contact_email').value = state.currentUserProfile.email || '';
+    }
+
+    // THIS IS THE NEW SUBMISSION LOGIC THAT SAVES TO FIRESTORE
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        // Find the submit button inside the modal
+        const submitBtn = dom.modal.body.querySelector('button[type="submit"]'); 
+        if (submitBtn) {
+             submitBtn.disabled = true;
+             // Add a loading spinner to the button
+             submitBtn.innerHTML = '<div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mx-auto"></div>';
+        }
+
+        try {
+            // 1. Get all the data from the form
+            const name = form.querySelector('#contact_name').value;
+            const email = form.querySelector('#contact_email').value;
+            const description = form.querySelector('#description').value;
+            const ad_type = form.querySelector('input[name="ad_type"]:checked').value;
+            
+            // 2. Save the data to your Firestore 'inquiries' collection
+            //    Firestore will create this collection automatically the first time.
+            await addDoc(collection(db, 'inquiries'), {
+                type: 'advertising',
+                name: name,
+                contact_email: email,
+                description: description,
+                ad_type: ad_type,
+                submittedAt: serverTimestamp(),
+                userId: state.currentUser ? state.currentUser.uid : null
+            });
+
+            // 3. Close the modal and show a success message
+            closeModal();
+            showFeedbackToast('Inquiry submitted successfully!', 'bg-green-600');
+
+        } catch (error) {
+            console.error("Error submitting inquiry:", error);
+            showFeedbackToast('Submission failed. Please try again.', 'bg-red-500');
+            
+            // Re-enable the button if it failed
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                // Put the original button text back
+                submitBtn.innerHTML = '<i class="ph-bold ph-paper-plane-tilt"></i> Submit Inquiry';
+            }
+        }
+    });
+}
+    function openDashboardModal() {
+        if (!state.currentUser || !state.currentUserProfile) {
+            showFeedbackToast('Please log in to view your dashboard.', 'bg-orange-500');
+            return;
+        }
+
+        openModal('My Dashboard', document.getElementById('dashboard-template').innerHTML, { isFullScreen: true });
+
+        const modalBody = dom.modal.body;
+        modalBody.querySelector('#dashboard-close-btn').addEventListener('click', closeModal);
+
+        // Populate user details
+       // Populate user details
+        const user = state.currentUser;
+        const profile = state.currentUserProfile;
+        if (user && profile) {
+            modalBody.querySelector('#db-user-avatar').src = user.photoURL || `https://ui-avatars.com/api/?name=${(profile.name || user.email).charAt(0).toUpperCase()}&background=4f46e5&color=fff&size=128`;
+            modalBody.querySelector('#db-user-name').textContent = profile.name || user.displayName || 'Avas User';
+            modalBody.querySelector('#db-user-email').textContent = user.email;
+            modalBody.querySelector('#db-user-phone').textContent = profile.mobile || 'No phone number';
+            modalBody.querySelector('#db-user-role').textContent = profile.role || 'Not Set';
+
+            // Add listener for the new edit phone button
+            const editPhoneBtn = modalBody.querySelector('#db-edit-phone-btn');
+            if (editPhoneBtn) { // Check if button exists before adding listener
+            	editPhoneBtn.addEventListener('click', () => {
+            		// Open a new, standard modal using the profile template
+            		openModal('Update Phone Number', document.getElementById('complete-profile-template').innerHTML);
+            		
+            		// Get the form elements from the *newly opened* modal
+            		const form = dom.modal.body.querySelector('#complete-profile-form');
+            		const mobileInput = dom.modal.body.querySelector('#profile-mobile');
+            		const messageEl = dom.modal.body.querySelector('#profile-message');
+            		const submitBtn = dom.modal.body.querySelector('#save-profile-btn');
+            		
+            		// Pre-fill the input with the current phone number
+            		if (state.currentUserProfile && state.currentUserProfile.mobile) {
+            			mobileInput.value = state.currentUserProfile.mobile;
+            		}
+            		
+            		// Add the submit logic (this is the same logic from your openCompleteProfileModal)
+            		form.addEventListener('submit', async (e) => {
+            			e.preventDefault();
+            			const mobile = mobileInput.value.trim();
+            			
+            			if (!mobile || mobile.length < 10) {
+              				messageEl.textContent = 'Please enter a valid mobile number.';
+              				return;
+          			}
+          			
+          			submitBtn.disabled = true;
+          			submitBtn.textContent = 'Saving...';
+          			messageEl.textContent = '';
+          			
+          			try {
+              				const userDocRef = doc(db, 'users', state.currentUser.uid);
+            				await setDoc(userDocRef, { mobile: mobile }, { merge: true });
+            				
+              				if (state.currentUserProfile) {
+              					state.currentUserProfile.mobile = mobile;
+            				}
+          				
+          				// Update the dashboard phone number (which is open in the background)
+          				const dashboardPhoneEl = document.getElementById('db-user-phone'); // Use document to get element from the background page
+          				if (dashboardPhoneEl) {
+            					dashboardPhoneEl.textContent = mobile;
+          				}
+          				
+          				showFeedbackToast('Phone number updated!', 'bg-green-600');
+          				closeModal(); // This will close the "Update Phone" modal
+          				
+        			} catch (error) {
+          				console.error("Error updating mobile number:", error);
+          				messageEl.textContent = 'Could not save. Please try again.';
+        			} finally {
+          				if (submitBtn) {
+            					submitBtn.disabled = false;
+            					submitBtn.textContent = 'Save Profile';
+        				}
+        			}
+        		});
+      		});
+      	}
+        } // End of if (user && profile)
+
+        const userPlots = state.allPlots.filter(p => p.owner_id === state.currentUser.uid);
+
+        const totalListings = userPlots.length;
+        const totalValue = userPlots.reduce((sum, plot) => sum + (Number(plot.price) || 0), 0);
+        const verifiedCount = userPlots.filter(p => p.is_verified).length;
+
+        modalBody.querySelector('#db-total-listings').textContent = totalListings;
+        modalBody.querySelector('#db-total-value').textContent = `₹${formatIndianCurrency(totalValue)}`;
+        modalBody.querySelector('#db-verified-listings').textContent = `${verifiedCount} / ${totalListings}`;
+        modalBody.querySelector('#db-current-plan').textContent = state.plan;
+
+        const recentListingsContainer = modalBody.querySelector('#db-recent-listings');
+        recentListingsContainer.innerHTML = '';
+        if (userPlots.length > 0) {
+            const sortedPlots = [...userPlots].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            sortedPlots.slice(0, 5).forEach(plot => {
+                const plotHtml = `
+                    <div class="grid grid-cols-4 gap-4 items-center p-3 bg-slate-800/50 rounded-md text-sm">
+                        <div class="col-span-2 font-semibold truncate">${plot.location}</div>
+                        <div class="text-slate-400 truncate">${plot.city}</div>
+                        <div class="text-right font-bold text-white">₹${formatIndianCurrency(plot.price)}</div>
+                    </div>`;
+                recentListingsContainer.insertAdjacentHTML('beforeend', plotHtml);
+            });
+        } else {
+            recentListingsContainer.innerHTML = `<p class="text-slate-500 text-center py-8">You haven't listed any properties yet.</p>`;
+        }
+        
+        const cityCounts = userPlots.reduce((acc, plot) => {
+            acc[plot.city] = (acc[plot.city] || 0) + 1;
+            return acc;
+        }, {});
+
+        const chartLabels = Object.keys(cityCounts);
+        const chartData = Object.values(cityCounts);
+
+        const ctx = modalBody.querySelector('#db-listings-chart')?.getContext('2d');
+        if (ctx) {
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: chartLabels,
+                    datasets: [{
+                        label: 'Listings',
+                        data: chartData,
+                        backgroundColor: ['#4f46e5', '#10b981', '#3b82f6', '#f59e0b', '#ec4899'],
+                        borderColor: 'transparent',
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: { color: '#94a3b8' }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    function openEditPlotModal(plotId) {
+        const plot = state.allPlots.find(p => p.id === plotId);
+        if (!plot) {
+            showFeedbackToast('Could not find plot data.', 'bg-red-500');
+            return;
+        }
+
+        openModal('Edit Listing', document.getElementById('edit-plot-template').innerHTML);
+
+        // Use a timeout to ensure the modal DOM is ready
+        setTimeout(() => {
+            const form = dom.modal.body.querySelector('#edit-plot-form');
+            if (!form) return;
+
+            form.querySelector('#edit-plot-id').value = plot.id;
+            form.querySelector('#edit-location').value = plot.location || '';
+            form.querySelector('#edit-city').value = plot.city || '';
+            form.querySelector('#edit-area_sqft').value = plot.area_sqft || '';
+            form.querySelector('#edit-price').value = formatIndianCurrency(plot.price).replace('₹', '').trim();
+
+            form.addEventListener('submit', handleUpdatePlot);
+        }, 50);
+    }
+
+    async function handleUpdatePlot(e) {
+        e.preventDefault();
+        const form = e.target;
+        const submitBtn = form.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = 'Saving...';
+
+        const plotId = form.querySelector('#edit-plot-id').value;
+        if (!plotId) {
+            showFeedbackToast('Error: Plot ID is missing.', 'bg-red-500');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="ph-bold ph-floppy-disk mr-2"></i> Save Changes';
+            return;
+        }
+
+        try {
+            const updatedData = {
+                location: form.querySelector('#edit-location').value,
+                city: form.querySelector('#edit-city').value,
+                area_sqft: parseInt(form.querySelector('#edit-area_sqft').value, 10),
+                price: parseINR(form.querySelector('#edit-price').value),
+                city_lowercase: form.querySelector('#edit-city').value.toLowerCase()
+            };
+
+            const plotDocRef = doc(db, 'plots', plotId);
+            await updateDoc(plotDocRef, updatedData);
+
+            showFeedbackToast('Listing updated successfully!', 'bg-green-600');
+            closeModal();
+
+        } catch (error) {
+            console.error("Error updating plot:", error);
+            showFeedbackToast('Update failed. Please try again.', 'bg-red-500');
+        } finally {
+            if(submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="ph-bold ph-floppy-disk mr-2"></i> Save Changes';
+            }
+        }
+    }
+
+    function loadGoogleMaps() {
+        if (state.apiKeys.google && state.apiKeys.google !== "PASTE_YOUR_RESTRICTED_GOOGLE_MAPS_KEY_HERE" && !window.google) {
+            state.googleMapsPromise = new Promise(resolve => {
+                state.googleMapsResolve = resolve;
+            });
+
+            const script = document.createElement('script');
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${state.apiKeys.google}&callback=initMap&libraries=places&loading=async`;
+            script.async = true;
+            document.head.appendChild(script);
+        } else if (!state.apiKeys.google || state.apiKeys.google === "PASTE_YOUR_RESTRICTED_GOOGLE_MAPS_KEY_HERE") {
+            console.warn("Google Maps API key not set. Map features will be disabled.");
+        }
+    }
+    
+    window.initMap = () => {
+        console.log("Google Maps script loaded and ready.");
+        state.googleMapsReady = true;
+        if (state.googleMapsResolve) {
+            state.googleMapsResolve();
+            state.googleMapsResolve = null;
+        }
+    }
+    
+    function ensureGoogleMapsReady() {
+        if (state.googleMapsReady) {
+            return Promise.resolve();
+        }
+        if (!state.googleMapsPromise) {
+            return Promise.reject("Google Maps not initialized, possibly due to missing API key.");
+        }
+        return state.googleMapsPromise;
+    }
+
+    async function callGeminiAPI(data) {
+        console.log("Calling secure Cloud Function with data:", data);
+        showFeedbackToast("Calling AI via secure function...", "bg-blue-500");
+        try {
+            const callGeminiFunction = httpsCallable(functions, 'callGemini');
+            const response = await callGeminiFunction(data);
+            const text = response.data.result || '';
+            return text.replace(/```json/g, '').replace(/```/g, '').trim();
+        } catch (err) {
+            console.error("Cloud Function call failed:", err);
+            const errorMessage = `AI call failed: ${err.message}`;
+            return `{"error": "${errorMessage}"}`;
+        }
+    }
+    
+    async function getAIResponse(q, contextPlot = null) {
+        const requestData = { task: 'chat', query: q, plot: contextPlot };
+        const response = await callGeminiAPI(requestData);
+        return response;
+    }
+    
+    async function getAIComparison(p1, p2) {
+        const plot1ForAI = {
+            price: p1.price,
+            location: p1.location,
+            city: p1.city,
+            area_sqft: p1.area_sqft,
+            property_type: p1.property_type
+        };
+        const plot2ForAI = {
+            price: p2.price,
+            location: p2.location,
+            city: p2.city,
+            area_sqft: p2.area_sqft,
+            property_type: p2.property_type
+        };
+
+        const prompt = `You are a real estate AI. Compare these two plots based on their attributes (price, location, area, amenities, etc.). Provide a nuanced recommendation. Respond with only a valid JSON object.
+        Plot 1: ${JSON.stringify(plot1ForAI)}
+        Plot 2: ${JSON.stringify(plot2ForAI)}
+        JSON format: { "recommendation": "Markdown formatted summary of which plot is a better investment and why. Consider all factors provided." } `;
+        return await callGeminiAPI(prompt);
+    }
+    
+    async function getAISummary(plot) {
+        const prompt = `You are a real estate AI. Provide a detailed summary for this specific plot. The pros and cons should be unique to its attributes. Respond with only a valid JSON object.
+        Plot: ${JSON.stringify(plot)}
+        JSON format: { "pros": ["A specific pro based on location, price, or amenities", "Another specific pro"], "cons": ["A specific con, e.g., 'Price per sqft is slightly above the area average'", "Another specific con"], "verdict": "A concise, one-sentence final verdict that balances the pros and cons." }`;
+        return await callGeminiAPI(prompt);
+    }
+    
+    async function getAIBestValue(plot) {
+      const estimatedPrice = plot.price * (0.9 + Math.random() * 0.2);
+      const formattedEstimatedPrice = `₹${formatIndianCurrency(estimatedPrice)}`;
+        const prompt = `You are a real estate AI. Analyze this plot's value based on its listing price compared to an estimated market value. Respond with only a valid JSON object.
+        Plot: ${JSON.stringify(plot)}
+        AI Estimated Market Value is ${formattedEstimatedPrice}.
+        JSON format: { "rating": "Excellent|Good|Fair|Overpriced", "analysis": "Markdown formatted brief explanation for the rating, comparing the listing price to the estimated value and considering the plot's features." } `;
+        return await callGeminiAPI(prompt);
+    }
+    
+    function showFeedbackToast(msg, color) {
+        const toast = dom.feedbackToast;
+        if (!toast) return;
+        toast.textContent = msg;
+        toast.className = `text-sm font-semibold absolute -top-12 left-1/2 -translate-x-1/2 w-max px-4 py-2 rounded-md shadow-lg transition-all duration-300 ${color}`;
+        toast.classList.remove('opacity-0');
+        setTimeout(() => toast.classList.add('opacity-0'), 3000);
+    }
+    
+    function toggleChat() {
+        openModal('24/7 AI Support', document.getElementById('chat-modal-template').innerHTML, { customClass: 'md:max-w-xl h-4/5' });
+        
+        dom.chat.context = document.getElementById('chat-context');
+        dom.chat.box = document.getElementById('chat-box');
+        dom.chat.starters = document.getElementById('chat-starters');
+        dom.chat.input = document.getElementById('chat-input');
+        dom.chat.sendBtn = document.getElementById('chat-send-btn');
+        
+        dom.chat.sendBtn.addEventListener('click', handleChatInput);
+        dom.chat.input.addEventListener('keydown', e => { if (e.key === 'Enter') handleChatInput(); });
+        dom.chat.starters.addEventListener('click', e => { if (e.target.matches('.chat-starter-btn')) { dom.chat.input.value = e.target.textContent; handleChatInput(); } });
+
+        updateChatContextUI();
+        updateChatStarters();
+    }
+
+
+    function updateAdRibbon() {
+      let ribbon = document.getElementById('avas-ad-ribbon');
+      if (!ribbon) {
+        ribbon = document.createElement('div');
+        ribbon.id = 'avas-ad-ribbon';
+        ribbon.className = 'fixed top-0 left-0 right-0 z-50 text-center text-xs md:text-sm';
+        document.body.prepend(ribbon);
+      }
+      if (state.plan === 'free') {
+        ribbon.innerHTML = `<div class="bg-indigo-900/70 backdrop-blur border-b border-indigo-800 text-indigo-200 px-3 py-2 flex items-center justify-center"><span>Sponsored: Upgrade to remove ads.</span><button id="close-ad-ribbon" class="ml-4 text-indigo-200 hover:text-white">&times;</button></div>`;
+        ribbon.style.display = 'block';
+        document.querySelector('header').style.top = '30px';
+        document.getElementById('close-ad-ribbon').addEventListener('click', () => {
+            ribbon.style.display = 'none';
+            document.querySelector('header').style.top = '0px';
+        });
+      } else {
+        ribbon.style.display = 'none';
+        document.querySelector('header').style.top = '0px';
+      }
+    }
+
+    function openRoleSelectionModal() {
+        openModal('', document.getElementById('role-selection-template').innerHTML);
+        dom.modal.closeBtn.style.display = 'none';
+
+        dom.modal.body.addEventListener('click', async (e) => {
+            const card = e.target.closest('.role-card');
+            if (!card) return;
+
+            const selectedRole = card.dataset.role;
+            if (!selectedRole || !state.currentUser) return;
+
+            try {
+                showFeedbackToast('Saving your role...', 'bg-blue-500');
+                const userDocRef = doc(db, 'users', state.currentUser.uid);
+                await setDoc(userDocRef, { role: selectedRole }, { merge: true });
+
+                if (state.currentUserProfile) {
+                    state.currentUserProfile.role = selectedRole;
+                } else {
+                    state.currentUserProfile = { role: selectedRole };
+                }
+                
+                showFeedbackToast('Role selected successfully!', 'bg-green-600');
+                dom.modal.closeBtn.style.display = 'block'; // Restore close button
+            	handleAuthStateChange(); // Update UI
+    s             
+            	// *** NEW LOGIC: Now check for mobile number ***
+            	if (!state.currentUserProfile.mobile) {
+                	openCompleteProfileModal(); // Open the next modal
+  	} else {
+      	        	closeModal(); // All data is present, so close
+      	}
+
+            } catch (error) {
+                console.error("Error saving user role:", error);
+                showFeedbackToast('Could not save your role. Please try again.', 'bg-red-500');
+            }
+        });
+    }
+    function openCompleteProfileModal() {
+        // This modal is opened right after the role selection modal,
+        // so we just replace the content instead of calling openModal() again.
+        dom.modal.title.textContent = '';
+        dom.modal.body.innerHTML = document.getElementById('complete-profile-template').innerHTML;
+        dom.modal.closeBtn.style.display = 'none'; // Keep it non-dismissible
+
+        const form = dom.modal.body.querySelector('#complete-profile-form');
+        const mobileInput = dom.modal.body.querySelector('#profile-mobile');
+        const messageEl = dom.modal.body.querySelector('#profile-message');
+        const submitBtn = dom.modal.body.querySelector('#save-profile-btn');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const mobile = mobileInput.value.trim();
+            
+            if (!mobile || mobile.length < 10) {
+                messageEl.textContent = 'Please enter a valid mobile number.';
+                return;
+            }
+
+            if (!state.currentUser) {
+                messageEl.textContent = 'Error: No user is logged in.';
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Saving...';
+            messageEl.textContent = '';
+
+            try {
+                const userDocRef = doc(db, 'users', state.currentUser.uid);
+                await setDoc(userDocRef, { mobile: mobile }, { merge: true });
+
+                if (state.currentUserProfile) {
+                    state.currentUserProfile.mobile = mobile;
+                } else {
+                    state.currentUserProfile = { mobile: mobile };
+                }
+
+                showFeedbackToast('Profile complete!', 'bg-green-600');
+                dom.modal.closeBtn.style.display = 'block'; // Restore close button
+            	handleAuthStateChange(); // Update dashboard phone number
+            	closeModal();
+
+            } catch (error) {
+                console.error("Error saving mobile number:", error);
+                messageEl.textContent = 'Could not save. Please try again.';
+            } finally {
+            	if (submitBtn) {
+           	submitBtn.disabled = false;
+                	submitBtn.textContent = 'Save Profile';
+          	}
+            }
+        });
+    }
+
+    function handleAuthStateChange() {
+        const user = state.currentUser;
+        dom.auth.container.classList.toggle('hidden', !!user);
+        dom.auth.userProfileContainer.classList.toggle('hidden', !user);
+
+        dom.auth.addPlotBtn.style.display = user ? 'flex' : 'none';
+
+        if (user) {
+            dom.auth.userProfileContainer.innerHTML = `
+                <div class="relative">
+                    <button id="profile-btn" class="flex items-center gap-2 text-white font-semibold">
+                        <img src="${user.photoURL || `https://ui-avatars.com/api/?name=${(user.displayName || user.email).charAt(0).toUpperCase()}&background=4f46e5&color=fff`}" class="w-10 h-10 rounded-full object-cover">
+                    </button>
+                    <div id="profile-dropdown" class="profile-dropdown">
+                        <div class="px-4 py-2 border-b border-border-dark">
+                            <p class="font-semibold text-sm text-white truncate">${user.displayName || 'User'}</p>
+                            <p class="text-xs text-text-muted truncate">${user.email}</p>
+                        </div>
+                            <a href="#" id="dashboard-btn">Dashboard</a>                        <a href="#" id="my-listings-btn">My Listings</a>
+                        <button id="signout-btn">Sign Out</button>
+                    </div>
+                </div>
+            `;
+            
+            const profileBtn = document.getElementById('profile-btn');
+            const dropdown = document.getElementById('profile-dropdown');
+            
+            profileBtn.addEventListener('click', () => {
+                dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+            });
+            
+            document.getElementById('dashboard-btn').addEventListener('click', (e) => {
+                e.preventDefault();
+                openDashboardModal();
+                dropdown.style.display = 'none';
+            });
+
+            document.getElementById('my-listings-btn').addEventListener('click', (e) => {
+                e.preventDefault();
+                state.activeFilter = 'mine';
+                listenForPlots();
+                dropdown.style.display = 'none';
+            });
+            
+            document.getElementById('signout-btn').addEventListener('click', () => {
+                signOut(auth);
+                state.activeFilter = 'all';
+                listenForPlots();
+                showFeedbackToast('Signed out.', 'bg-green-600');
+            });
+            
+            document.addEventListener('click', (e) => {
+                if (dom.auth.userProfileContainer && !dom.auth.userProfileContainer.contains(e.target)) {
+                    if (dropdown) dropdown.style.display = 'none';
+                }
+            });
+
+        } else {
+            dom.auth.userProfileContainer.innerHTML = '';
+        }
+    }
+    
+    function updateActiveNavLinks() { dom.plotsNavLink.classList.toggle('active', state.activePropertyType === 'Plots'); dom.landNavLink.classList.toggle('active', state.activePropertyType === 'Land'); }
+    function updateAiActionButtons() { const c = state.selectedPlotIds.size; dom.compareBtn.disabled = c !== 2; dom.compareBtn.innerHTML = `<i class="ph-bold ph-git-compare"></i> Compare (${c}/2)`; dom.summarizeBtn.disabled = c !== 1; dom.summarizeBtn.innerHTML = `<i class="ph-bold ph-sparkle"></i> Summarize (${c === 1 ? '1' : '0'})`; dom.bestValueBtn.disabled = c !== 1; dom.bestValueBtn.innerHTML = `<i class="ph-bold ph-tag"></i> Best Value (${c === 1 ? '1' : '0'})`; }
+    function showGridLoader() { dom.plotGrid.innerHTML = `<div class="col-span-full flex items-center justify-center py-20"><div class="loader"></div></div>`; }
+    
+    async function handleCompareClick() {
+      const plots = Array.from(state.selectedPlotIds).map(id => state.allPlots.find(p => p.id == id));
+      if (plots.length !== 2 || plots.includes(undefined)) { showFeedbackToast('Please select exactly 2 plots to compare.', 'bg-red-500'); return; }
+      await handleAiAction('AI Comparison', 'compare', plots);
+    }
+    
+    async function handleSummarizeClick() {
+      const plot = state.allPlots.find(p => p.id == Array.from(state.selectedPlotIds)[0]);
+      if (!plot) { showFeedbackToast('Please select a plot to summarize.', 'bg-red-500'); return; }
+      await handleAiAction('AI Summary', 'summarize', [plot]);
+    }
+    
+    async function handleBestValueClick() {
+      const plot = state.allPlots.find(p => p.id == Array.from(state.selectedPlotIds)[0]);
+      if (!plot) { showFeedbackToast('Please select a plot to analyze.', 'bg-red-500'); return; }
+      await handleAiAction('AI Best Value Analysis', 'best_value', [plot]);
+    }
+    
+    async function handleChatInput() { 
+        if (!dom.chat.input) return;
+        const message = dom.chat.input.value.trim(); 
+        if (message === '') return; 
+        dom.chat.input.value = ''; 
+        displayChatMessage('user', message); 
+        const thinking = displayChatMessage('ai', 'Thinking...', true); 
+        const response = await getAIResponse(message, state.contextPlot); 
+        try {
+            const parsedResponse = JSON.parse(response);
+            thinking.innerHTML = `<i class="ph-bold ph-robot text-indigo-400 text-xl mr-2"></i><span>${parsedResponse.error || "Sorry, I couldn't process that."}</span>`;
+        } catch (e) {
+             thinking.innerHTML = `<i class="ph-bold ph-robot text-indigo-400 text-xl mr-2 flex-shrink-0"></i><div>${marked.parse(response)}</div>`;
+        }
+        
+        dom.chat.box.scrollTop = dom.chat.box.scrollHeight; 
+    }
+    
+    function displayChatMessage(sender, message, isThinking = false) { if(!dom.chat.box) return; const div = document.createElement('div'); div.classList.add('flex', 'items-start', 'gap-3', 'max-w-full', 'mb-4'); if (sender === 'user') { div.classList.add('justify-end'); div.innerHTML = `<div class="chat-bubble-user text-white p-3 rounded-lg max-w-xs break-words">${message}</div>`; } else { div.innerHTML = `<div class="chat-bubble-ai text-white p-3 rounded-lg max-w-xs break-words flex items-start"><i class="ph-bold ph-robot text-indigo-400 text-xl mr-2 flex-shrink-0"></i><span>${isThinking ? message : '...'}</span></div>`; } dom.chat.box.appendChild(div); dom.chat.box.scrollTop = dom.chat.box.scrollHeight; return div.querySelector('div:last-child > span') || div.querySelector('div:last-child'); }
+    
+    function initLoginListeners() {
+        const b = dom.modal.body;
+        const form = b.querySelector('#auth-form');
+        const emailInput = b.querySelector('#email');
+        const passwordInput = b.querySelector('#password');
+        const signupFields = b.querySelector('#signup-fields');
+        const nameInput = b.querySelector('#name');
+        const mobileInput = b.querySelector('#mobile');
+        const submitBtn = b.querySelector('#submitBtn');
+        const msg = b.querySelector('#message');
+        const title = b.querySelector('#title');
+        const subtitle = b.querySelector('#subtitle');
+        const toggleBtn = b.querySelector('#toggle-auth-mode-btn');
+        const googleSignInBtn = b.querySelector('#google-signin-btn');
+        let isSignUp = false;
+
+        b.querySelector('#login-close-btn')?.addEventListener('click', closeModal);
+
+        function updateUI() {
+            msg.textContent = '';
+            if (isSignUp) {
+                title.textContent = "Create an Account";
+                subtitle.textContent = "Join Avas to find your perfect plot.";
+                signupFields.classList.remove('hidden');
+                nameInput.required = true;
+                mobileInput.required = true;
+                submitBtn.textContent = "Sign Up";
+                toggleBtn.textContent = "Already have an account? Sign In";
+            } else {
+                title.textContent = "Welcome Back!";
+                subtitle.textContent = "Sign in to your account to continue.";
+                signupFields.classList.add('hidden');
+                nameInput.required = false;
+                mobileInput.required = false;
+                submitBtn.textContent = "Sign In";
+                toggleBtn.textContent = "Don't have an account? Sign Up";
+            }
+        }
+
+        toggleBtn.addEventListener('click', e => {
+            e.preventDefault();
+            isSignUp = !isSignUp;
+            updateUI();
+        });
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            msg.textContent = '';
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Processing...';
+
+            const email = emailInput.value;
+            const password = passwordInput.value;
+
+            try {
+                if (isSignUp) {
+                    const name = nameInput.value;
+                    const mobile = mobileInput.value;
+                    if (!name || !mobile) throw new Error("Please fill in all fields.");
+
+                    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                    const newUser = userCredential.user;
+                    await updateProfile(newUser, { displayName: name });
+                    
+                    const userDocRef = doc(db, 'users', newUser.uid);
+                    await setDoc(userDocRef, {
+                        name: name,
+                        email: email,
+                        mobile: mobile,
+                        createdAt: serverTimestamp()
+                    });
+
+                    state.currentUser = newUser;
+                    state.currentUserProfile = { name, email, mobile };
+
+                    closeModal();
+                    showFeedbackToast('Account created successfully!', 'bg-green-600');
+
+                    handleAuthStateChange();
+
+                    openRoleSelectionModal();
+
+                } else {
+                    await signInWithEmailAndPassword(auth, email, password);
+                    closeModal();
+                    showFeedbackToast('Signed in successfully!', 'bg-green-600');
+                }
+            } catch (error) {
+                console.error("Auth error:", error);
+                msg.textContent = error.message;
+            } finally {
+                submitBtn.disabled = false;
+                updateUI();
+            }
+        });
+
+        googleSignInBtn.addEventListener('click', async () => {
+            try {
+                const provider = new GoogleAuthProvider();
+                provider.setCustomParameters({ prompt: 'select_account' });
+
+                const result = await signInWithPopup(auth, provider);
+                const user = result.user;
+                
+                const userDocRef = doc(db, 'users', user.uid);
+                let userDocSnap = await getDoc(userDocRef);
+                let userProfile;
+
+                if (!userDocSnap.exists()) {
+                    userProfile = {
+                        name: user.displayName,
+                        email: user.email,
+                        mobile: user.phoneNumber || '',
+                        createdAt: serverTimestamp()
+                    };
+                    await setDoc(userDocRef, userProfile);
+                } else {
+                    userProfile = userDocSnap.data();
+                }
+
+                state.currentUser = user;
+                state.currentUserProfile = userProfile;
+                
+                closeModal();
+                showFeedbackToast('Signed in with Google!', 'bg-green-600');
+
+                handleAuthStateChange();
+
+                if (!userProfile.role) {
+                    openRoleSelectionModal();
+                }
+
+            } catch (error) {
+                console.error("Google Sign-In error:", error);
+                msg.textContent = `Google Sign-In failed: ${error.message}`;
+            }
+        });
+        
+        updateUI();
+    }
+
+
+    function initLoginIconAnimation() {
+        const container = document.getElementById('login-visual');
+        if (!container) return;
+        const icons = ['ph-map-pin-line', 'ph-brain', 'ph-user', 'ph-sparkle', 'ph-house-line'];
+        const iconCount = 20;
+        
+        for (let i = 0; i < iconCount; i++) {
+            const iconEl = document.createElement('i');
+            const iconClass = icons[Math.floor(Math.random() * icons.length)];
+            iconEl.className = `login-icon ph ${iconClass}`;
+            iconEl.style.top = `${Math.random() * 100}%`;
+            iconEl.style.left = `${Math.random() * 100}%`;
+            iconEl.style.fontSize = `${Math.random() * 30 + 20}px`;
+            iconEl.style.animationDelay = `${Math.random() * 15}s`;
+            iconEl.style.animationDuration = `${Math.random() * 10 + 10}s`;
+            container.appendChild(iconEl);
+        }
+    }
+
+    function updateChatStarters() { 
+        let starters = ['Investment strategies?', 'Best cities to invest?'];
+        if (state.contextPlot) {
+            starters = ['Summarize this plot.', 'What are the risks?'];
+        } else if (state.selectedPlotIds.size === 1) {
+            const plot = state.allPlots.find(p => p.id == Array.from(state.selectedPlotIds)[0]);
+            if(plot) starters = [`Summarize plot in ${plot.location}`, `Is ${plot.location} a good investment?`];
+        }
+        
+        if(dom.chat.starters) dom.chat.starters.innerHTML = starters.map(q => `<button class="chat-starter-btn text-xs text-left p-2 bg-slate-700/50 hover:bg-slate-700 rounded-md">${q}</button>`).join(''); 
+    }
+    function openAddPlotModalGuarded() { if (!state.currentUser) { openLoginModal(); } else { openAddPlotModal(); }}
+function parseINR(str) {
+    if (typeof str === 'number') return str;
+    if (!str) return 0;
+
+    let s = String(str).toLowerCase().replace(/[₹,]/g, '').trim();
+    
+    let multiplier = 1;
+
+    if (s.includes('crore') || s.includes('cr')) {
+        multiplier = 10000000;
+        s = s.replace(/crore|cr/g, '').trim(); 
+    } 
+    else if (s.includes('lakh') || s.includes('lac')) {
+        multiplier = 100000;
+        s = s.replace(/lakh|lac/g, '').trim();
+    }
+
+    const numberPart = parseFloat(s);
+    
+    if (isNaN(numberPart)) return 0;
+
+    return numberPart * multiplier;
+}
+
+    function formatIndianCurrency(num) {
+        if (typeof num !== 'number') return num;
+        const x = Math.round(num);
+        if (x >= 10000000) return (x / 10000000).toFixed(2).replace(/\.00$/, '') + ' Crore';
+        if (x >= 100000) return (x / 100000).toFixed(2).replace(/\.00$/, '') + ' Lakh';
+        return x.toLocaleString('en-IN');
+    }
+
+    function renderPriceChart(chartData) {
+        const ctx = dom.modal.body.querySelector('#price-trend-chart')?.getContext('2d');
+        if (!ctx) return;
+        if (state.priceChart) state.priceChart.destroy();
+        
+        const labels = chartData.map(d => d.year);
+        const data = chartData.map(d => d.price);
+
+        state.priceChart = new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets: [{ label: 'Estimated Property Value', data, borderColor: '#4f46e5', backgroundColor: 'rgba(79, 70, 229, 0.2)', fill: true, tension: 0.4 }] },
+            options: { responsive: true, maintainAspectRatio: false, scales: { y: { ticks: { color: '#94a3b8', callback: value => `₹${formatIndianCurrency(value)}` }, grid: { color: 'rgba(148, 163, 184, 0.1)' } }, x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148, 163, 184, 0.1)' } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => `Value: ₹${formatIndianCurrency(context.parsed.y)}` } } } }
+        });
+    }
+
+    async function handleAiAction(title, task, plots) {
+        const loadingHtml = document.getElementById('ai-analysis-loading-template').innerHTML;
+        openModal('', loadingHtml, { isFullScreen: true });
+
+        const cleanPlots = plots.map(p => ({
+            id: p.id, location: p.location || "N/A", city: p.city || "N/A",
+            price: p.price || 0, area_sqft: p.area_sqft || 0,
+            property_type: p.property_type || "N/A"
+        }));
+
+        let requestData;
+        if (task === 'summarize' || task === 'best_value') {
+            requestData = { task: task, plot: cleanPlots[0] };
+        } else if (task === 'compare') {
+            requestData = { task: task, plots: cleanPlots };
+        }
+
+        const responseText = await callGeminiAPI(requestData);
+        let data;
+        try {
+            data = JSON.parse(responseText);
+            if(data.error) {
+                showFeedbackToast(data.error, 'bg-red-500');
+                closeModal();
+                return;
+            }
+        } catch(e) {
+            console.error("Failed to parse AI JSON response:", responseText);
+            showFeedbackToast("AI response was not valid. Please try again.", "bg-red-500");
+            closeModal();
+            return;
+        }
+        
+        if (title === 'AI Summary') {
+            const template = document.getElementById('ai-summary-template').innerHTML;
+            dom.modal.body.innerHTML = template;
+            const plot = plots[0];
+            dom.modal.body.querySelector('#summary-location').textContent = `For plot in ${plot.location}, ${plot.city}`;
+            
+            const highlightsContainer = dom.modal.body.querySelector('#summary-highlights');
+            highlightsContainer.innerHTML = `
+                <div class="bg-card-elevated p-4 rounded-lg"><p class="text-sm text-slate-400">Price</p><p class="text-xl font-bold text-white">₹${formatIndianCurrency(plot.price)}</p></div>
+                <div class="bg-card-elevated p-4 rounded-lg"><p class="text-sm text-slate-400">Area</p><p class="text-xl font-bold text-white">${plot.area_sqft} sqft</p></div>
+                <div class="bg-card-elevated p-4 rounded-lg"><p class="text-sm text-slate-400">Vastu</p><p class="text-xl font-bold text-white">${plot.vastu_score || 'N/A'}/100</p></div>
+            `;
+
+            const prosList = dom.modal.body.querySelector('#summary-pros ul');
+            data.pros.forEach(pro => {
+                prosList.innerHTML += `<li class="flex items-start gap-2"><i class="ph ph-check-circle text-green-400 mt-1"></i><span>${pro}</span></li>`;
+            });
+            
+            const consList = dom.modal.body.querySelector('#summary-cons ul');
+            data.cons.forEach(con => {
+                consList.innerHTML += `<li class="flex items-start gap-2"><i class="ph ph-x-circle text-red-400 mt-1"></i><span>${con}</span></li>`;
+            });
+
+            dom.modal.body.querySelector('#summary-verdict').textContent = data.verdict;
+
+        } else if(title === 'AI Best Value Analysis'){
+            const template = document.getElementById('ai-best-value-template').innerHTML;
+            dom.modal.body.innerHTML = template;
+            const plot = plots[0];
+            dom.modal.body.querySelector('#best-value-location').textContent = `For plot in ${plot.location}, ${plot.city}`;
+            
+            const ratingEl = dom.modal.body.querySelector('#best-value-rating');
+            ratingEl.textContent = data.rating;
+            if (data.rating === 'Excellent') ratingEl.classList.add('text-green-400');
+            else if (data.rating === 'Good') ratingEl.classList.add('text-yellow-400');
+            else ratingEl.classList.add('text-orange-400');
+
+            const estimatedPrice = plot.price * (0.9 + Math.random() * 0.2);
+            dom.modal.body.querySelector('#best-value-listing-price').textContent = `₹${formatIndianCurrency(plot.price)}`;
+            dom.modal.body.querySelector('#best-value-estimated-price').textContent = `~₹${formatIndianCurrency(estimatedPrice)}`;
+            dom.modal.body.querySelector('#best-value-analysis').innerHTML = marked.parse(data.analysis);
+            
+        } else if(title === 'AI Comparison'){
+            const comparisonTemplate = document.getElementById('ai-comparison-template').innerHTML;
+            dom.modal.body.innerHTML = comparisonTemplate;
+            const columnsContainer = dom.modal.body.querySelector('#comparison-columns');
+            plots.forEach((plot, index) => {
+                const imageUrl = Array.isArray(plot.image_urls) && plot.image_urls.length > 0 ? plot.image_urls[0] : 'https://placehold.co/600x400';
+                columnsContainer.innerHTML += `
+                    <div class="bg-card-elevated p-4 rounded-lg border border-border-dark">
+                        <h4 class="text-lg font-bold text-white mb-2">Plot ${index + 1}: ${plot.location}</h4>
+                        <img src="${imageUrl}" class="w-full h-40 object-cover rounded-md mb-4">
+                        <ul class="text-slate-300 space-y-2 text-sm">
+                            <li><strong>Price:</strong> ₹${formatIndianCurrency(plot.price)}</li>
+                            <li><strong>Area:</strong> ${plot.area_sqft} sqft</li>
+                            <li><strong>Vastu:</strong> ${plot.vastu_score || 'N/A'}/100</li>
+                        </ul>
+                    </div>`;
+            });
+            dom.modal.body.querySelector('#ai-recommendation').innerHTML = marked.parse(data.recommendation);
+        } else {
+             const backButton = `<button onclick="closeModal()" class="fixed top-6 left-8 text-white bg-black/30 backdrop-blur-sm hover:bg-black/50 p-3 rounded-full z-50 transition-colors"><i class="ph-bold ph-arrow-left text-2xl"></i></button>`;
+             dom.modal.body.innerHTML = `${backButton}<div class="p-4 sm:p-8 md:p-12 prose prose-invert max-w-none">${marked.parse(data)}</div>`;
+        }
+    }
+    
+    function initAddPlotFormListeners() {
+        const form = dom.modal.body.querySelector('#add-plot-form');
+        if (!form) return;
+        
+        let uploadedImages = [];
+        let uploadedAadhaar = [];
+        let uploadedSevTwelve = [];
+
+        dom.modal.body.addEventListener('click', (e) => {
+            if (e.target.matches('.next-btn, .prev-btn')) {
+                const currentStepEl = e.target.closest('.form-step');
+                const targetStep = e.target.dataset.next || e.target.dataset.prev;
+                const targetStepEl = form.querySelector(`.form-step[data-step="${targetStep}"]`);
+                if (targetStepEl) {
+                    currentStepEl.classList.add('hidden');
+                    targetStepEl.classList.remove('hidden');
+                    updateStepIndicator(targetStep);
+                    if (targetStep === '2') {
+                        ensureGoogleMapsReady().then(() => {
+                            initializeMapForModal('map', state.selectedPosition, true);
+                        });
+                    }
+                }
+            }
+        });
+
+        const imageDropArea = form.querySelector('#image-drop-area');
+        const imageInput = form.querySelector('#image-input');
+        const imagePreviewArea = form.querySelector('#image-preview-area');
+
+        if(imageDropArea) {
+            imageDropArea.addEventListener('click', () => imageInput.click());
+            imageDropArea.addEventListener('dragover', e => { e.preventDefault(); imageDropArea.classList.add('dragover'); });
+            imageDropArea.addEventListener('dragleave', () => imageDropArea.classList.remove('dragover'));
+            imageDropArea.addEventListener('drop', e => {
+                e.preventDefault();
+                imageDropArea.classList.remove('dragover');
+                handleImageFiles(e.dataTransfer.files);
+            });
+            imageInput.addEventListener('change', () => handleImageFiles(imageInput.files));
+        }
+
+        function handleImageFiles(files) {
+            const newFiles = Array.from(files).filter(file => file.type.startsWith('image/'));
+            if (uploadedImages.length + newFiles.length > 5) {
+                showFeedbackToast('You can upload a maximum of 5 images.', 'bg-red-500');
+                return;
+            }
+            uploadedImages.push(...newFiles.slice(0, 5 - uploadedImages.length));
+            renderImagePreviews();
+        }
+
+        function renderImagePreviews() {
+            imagePreviewArea.innerHTML = '';
+            uploadedImages.forEach((file, index) => {
+                const reader = new FileReader();
+                reader.onload = e => {
+                    const previewContainer = document.createElement('div');
+                    previewContainer.className = 'relative group animate-on-scroll in-view';
+                    previewContainer.innerHTML = `
+                        <div class="preview-image-container">
+                            <img src="${e.target.result}" class="preview-image">
+                        </div>
+                        <button type="button" data-index="${index}" class="remove-img-btn absolute top-1 right-1 bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity z-10">&times;</button>
+                    `;
+                    imagePreviewArea.appendChild(previewContainer);
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+        
+        if(imagePreviewArea) {
+            imagePreviewArea.addEventListener('click', e => {
+                const removeBtn = e.target.closest('.remove-img-btn');
+                if (removeBtn) {
+                    const indexToRemove = parseInt(removeBtn.dataset.index, 10);
+                    uploadedImages.splice(indexToRemove, 1);
+                    renderImagePreviews();
+                }
+            });
+        }
+
+        function setupDocDropArea(areaId, inputId, nameElId, fileArray) {
+            const dropArea = form.querySelector(`#${areaId}`);
+            const fileInput = form.querySelector(`#${inputId}`);
+            const fileNameEl = form.querySelector(`#${nameElId}`);
+
+            if (!dropArea || !fileInput || !fileNameEl) return;
+            const handler = (files) => {
+                if (files.length) {
+                    fileArray[0] = files[0];
+                    fileNameEl.textContent = files[0].name;
+                    fileNameEl.classList.add('text-green-400');
+                }
+            };
+            dropArea.addEventListener('click', () => fileInput.click());
+            dropArea.addEventListener('dragover', e => { e.preventDefault(); dropArea.classList.add('dragover'); });
+            dropArea.addEventListener('dragleave', () => dropArea.classList.remove('dragover'));
+            dropArea.addEventListener('drop', e => { e.preventDefault(); dropArea.classList.remove('dragover'); handler(e.dataTransfer.files); });
+            fileInput.addEventListener('change', () => handler(fileInput.files));
+        }
+
+        setupDocDropArea('aadhaar-drop-area', 'aadhaar-input', 'aadhaar-file-name', uploadedAadhaar);
+        setupDocDropArea('sev-twelve-drop-area', 'sev-twelve-input', 'sev-twelve-file-name', uploadedSevTwelve);
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const submitBtn = form.querySelector('button[type="submit"]');
+            const submitText = form.querySelector('#submit-text');
+            const submitLoader = form.querySelector('#submit-loader');
+            const progressContainer = form.querySelector('#upload-progress-container');
+            const progressBar = form.querySelector('#upload-progress-bar');
+
+            if (!state.currentUser) {
+                showFeedbackToast('You must be logged in to submit a plot.', 'bg-red-500');
+                openLoginModal();
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitLoader.classList.add('hidden'); 
+            progressContainer.classList.remove('hidden');
+            progressBar.style.width = '0%';
+            
+            try {
+                const uploadWithProgress = async (files, path, textUpdate) => {
+                    if (!files || files.length === 0) return [];
+                    const urls = [];
+                    for (const file of files) {
+                        if (!file) continue;
+                        submitText.textContent = `${textUpdate}: ${file.name.substring(0, 15)}...`;
+                        const filePath = `${state.currentUser.uid}/${path}/${Date.now()}_${file.name}`;
+                        const fileRef = ref(storage, filePath);
+                        const uploadTask = uploadBytesResumable(fileRef, file);
+
+                        await new Promise((resolve, reject) => {
+                            uploadTask.on('state_changed',
+                                (snapshot) => {
+                                    const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                                    progressBar.style.width = `${progress.toFixed(0)}%`;
+                                },
+                                (error) => {
+                                    console.error(`Upload failed for ${file.name}:`, error);
+                                    reject(error);
+                                },
+                                async () => {
+                                    const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+                                    urls.push(downloadURL);
+                                    resolve();
+                                }
+                            );
+                        });
+                    }
+                    return urls;
+                };
+
+                const imageUrls = await uploadWithProgress(uploadedImages, 'plot_images', 'Uploading image');
+                const aadhaarUrls = await uploadWithProgress(uploadedAadhaar, 'documents', 'Uploading Aadhaar');
+                const sevTwelveUrls = await uploadWithProgress(uploadedSevTwelve, 'documents', 'Uploading 7/12');
+
+                submitText.textContent = 'Saving Listing...';
+                progressBar.style.width = '100%';
+
+                const formData = new FormData(form);
+                const data = Object.fromEntries(formData.entries());
+                
+                const newPlot = {
+                    ...data,
+                    price: parseINR(data.price),
+                    contact_phone: data.contact_phone,
+                    area_sqft: parseInt(data.area_sqft, 10),
+                    latitude: state.selectedPosition.lat,
+                    longitude: state.selectedPosition.lng,
+                    image_urls: imageUrls,
+                    aadhaar_url: aadhaarUrls.length > 0 ? aadhaarUrls[0] : null,
+                    sev_twelve_url: sevTwelveUrls.length > 0 ? sevTwelveUrls[0] : null,
+                    is_verified: false,
+                    status: 'available', // <-- Set default status here
+                    owner_id: state.currentUser.uid,
+                    owner_name: state.currentUserProfile?.name || 'N/A',
+                    owner_email: state.currentUserProfile?.email || 'N/A',
+                    owner_mobile: state.currentUserProfile?.mobile || 'N/A',
+                    created_at: serverTimestamp(),
+                    city_lowercase: data.city.toLowerCase()
+                };
+
+                await addDoc(collection(db, 'plots'), newPlot);
+
+                showFeedbackToast('Plot submitted successfully!', 'bg-green-600');
+                closeModal();
+
+            } catch (error) {
+                console.error("Error submitting plot: ", error);
+                showFeedbackToast(`Submission failed: ${error.message}`, 'bg-red-500');
+            } finally {
+                submitBtn.disabled = false;
+                submitText.textContent = 'Verify with AI & Submit';
+                submitLoader.classList.remove('hidden'); 
+                if (progressContainer) progressContainer.classList.add('hidden');
+            }
+        });
+    }
+    
+    async function initializeMapForModal(elementId, center, isDraggable) {
+        await ensureGoogleMapsReady();
+        const mapElement = dom.modal.body.querySelector(`#${elementId}`);
+        if (!mapElement || !window.google) return;
+
+        const map = new google.maps.Map(mapElement, {
+            center: center,
+            zoom: 15,
+            disableDefaultUI: true,
+            styles: [ { "stylers": [ { "hue": "#ff1a00" }, { "invert_lightness": true }, { "saturation": -100 }, { "lightness": 33 }, { "gamma": 0.5 } ] }, { "featureType": "water", "elementType": "geometry", "stylers": [ { "color": "#2D333C" } ] } ]
+        });
+
+        const marker = new google.maps.Marker({
+            position: center,
+            map: map,
+            draggable: isDraggable
+        });
+
+        if (isDraggable) {
+            marker.addListener('dragend', () => {
+                const newPos = marker.getPosition();
+                state.selectedPosition = { lat: newPos.lat(), lng: newPos.lng() };
+            });
+        }
+        
+        const searchInput = dom.modal.body.querySelector('#location-search-input');
+        if (searchInput && google.maps.places) {
+            const autocomplete = new google.maps.places.Autocomplete(searchInput, {
+                fields: ["geometry", "name"],
+                types: ["geocode"]
+            });
+            
+            autocomplete.bindTo("bounds", map);
+
+            autocomplete.addListener('place_changed', () => {
+                const place = autocomplete.getPlace();
+                if (!place.geometry || !place.geometry.location) {
+                    showFeedbackToast(`No details available for input: '${place.name}'`, 'bg-orange-500');
+                    return;
+                }
+
+                if (place.geometry.viewport) {
+                    map.fitBounds(place.geometry.viewport);
+                } else {
+                    map.setCenter(place.geometry.location);
+                    map.setZoom(17);
+                }
+
+                marker.setPosition(place.geometry.location);
+                const newPos = marker.getPosition();
+                state.selectedPosition = { lat: newPos.lat(), lng: newPos.lng() };
+            });
+        }
+    }
+
+
+    function updateStepIndicator(currentStep) {
+        const indicator = dom.modal.body.querySelector('#step-indicator');
+        if (!indicator) return;
+        const steps = ['Details', 'Location', 'Images', 'Verify'];
+        indicator.innerHTML = ''; 
+        steps.forEach((label, i) => {
+            const stepNum = i + 1;
+            const isActive = stepNum == currentStep;
+            const isCompleted = stepNum < currentStep;
+            const stepEl = document.createElement('div');
+            stepEl.className = 'step relative flex flex-col items-center flex-1';
+            if(isCompleted) stepEl.classList.add('completed');
+            if(isActive) stepEl.classList.add('active');
+            stepEl.innerHTML = `
+                <div class="step-circle w-10 h-10 flex items-center justify-center rounded-full border-2 border-border-dark bg-card-dark relative z-10 font-bold">
+                    ${isCompleted ? '<i class="ph-bold ph-check"></i>' : stepNum}
+                </div>
+                <span class="step-label">${label}</span>
+            `;
+            indicator.appendChild(stepEl);
+        });
+    }
+    
+    function setChatContext(plotId) {
+        const plot = state.allPlots.find(p => p.id == plotId);
+        if (plot) {
+            state.contextPlot = plot;
+            if (dom.modal.wrapper.classList.contains('pointer-events-none')) {
+                toggleChat();
+            }
+            setTimeout(() => { 
+                updateChatContextUI();
+                displayChatMessage('ai', `Now discussing the plot in ${plot.location}. How can I help you with this specific property?`);
+            }, 50);
+        }
+    }
+
+    function clearChatContext() {
+        state.contextPlot = null;
+        updateChatContextUI();
+    }
+
+    function updateChatContextUI() {
+        if (dom.chat && dom.chat.context) {
+             if (state.contextPlot) {
+                 dom.chat.context.innerHTML = `
+                     <div class="flex items-center justify-between">
+                         <span>Focusing on: <strong>${state.contextPlot.location}</strong></span>
+                         <button id="clear-context-btn" class="text-xs hover:text-white">&times; Clear</button>
+                     </div>
+                 `;
+                 dom.chat.context.classList.remove('hidden');
+                 document.getElementById('clear-context-btn').addEventListener('click', clearChatContext);
+             } else {
+                 dom.chat.context.classList.add('hidden');
+                 dom.chat.context.innerHTML = '';
+             }
+             updateChatStarters();
+        }
+    }
+    
+    function generateVastuScore(facing, propertyType) {
+        let baseScore = 60;
+        const facingLower = (facing || '').toLowerCase();
+        
+        if (facingLower.includes('north-east') || facingLower.includes('east')) {
+            baseScore += 25;
+        } else if (facingLower.includes('north')) {
+            baseScore += 15;
+        } else if (facingLower.includes('west')) {
+            baseScore += 5;
+        }
+
+        if (propertyType === 'Residential') {
+            baseScore += 5;
+        }
+
+        return Math.min(99, Math.floor(baseScore + (Math.random() * 10 - 5)));
+    }
+
+    function generatePriceTrend(plot) {
+        const yearsToProject = 5;
+        const currentPrice = Number(plot.price);
+        const currentYear = new Date().getFullYear();
+
+        let baseAnnualGrowth = 0.08;
+        if (plot.city === 'Mumbai' || plot.city === 'Delhi NCR') baseAnnualGrowth = 0.11;
+        if (plot.property_type === 'Commercial') baseAnnualGrowth += 0.02;
+
+        const chartData = [];
+        let priceTracker = currentPrice;
+        let finalPrice = currentPrice;
+
+        for (let i = 0; i <= yearsToProject; i++) {
+            const year = currentYear + i;
+            chartData.push({ year: year, price: priceTracker });
+
+            const volatility = 0.04; 
+            const randomVolatility = (Math.random() - 0.5) * 2 * volatility;
+            const yearGrowth = baseAnnualGrowth + randomVolatility;
+            
+            priceTracker *= (1 + yearGrowth);
+        }
+
+        finalPrice = chartData[chartData.length - 1].price;
+
+        const totalGrowth = ((finalPrice / currentPrice) - 1) * 100;
+
+        return { growth: totalGrowth, chartData };
+    }
+
+    window.openPlotDetailModal = openPlotDetailModal;
+    window.toggleChat = toggleChat;
+    window.closeModal = closeModal;
+    window.openLoginModal = openLoginModal;
+    window.openSubscriptionModal = openSubscriptionModal;
+    window.createRazorpaySubscription = createRazorpaySubscription;
+
+  </script>
+
+  <style>
+    :root {
+      --brand-primary: #6366f1; /* Indigo 500 */
+      --brand-secondary: #f59e0b; /* Amber 500 */
+      --bg-dark: #05070D;
+      --text-light: #e2e8f0; /* Slate 200 */
+      --text-muted: #94a3b8; /* Slate 400 */
+      --card-dark: #0b1220;
+      --card-elevated: #0f172a; /* Slate 900 */
+      --border-dark: #1e293b; /* Slate 800 */
+      --brand-glow: rgba(99, 102, 241, 0.5);
+    }
+    html { scroll-behavior: smooth; }
+    body { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background-color: var(--bg-dark); color: var(--text-light); -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg-dark); }
+    ::-webkit-scrollbar-thumb { background: var(--border-dark); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+    header { background-color: rgba(5, 7, 13, 0.7); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid transparent; }
+    header.scrolled { box-shadow: 0 6px 30px rgba(0, 0, 0, 0.35); border-bottom: 1px solid var(--border-dark); }
+
+    .hero-section {
+    padding-top: 8rem;
+    padding-bottom: 15rem;
+    /* Remove the old background line */
+    /* background: linear-gradient(180deg, var(--card-elevated) 0%, var(--bg-dark) 100%); */
+
+    /* --- ADD THESE LINES --- */
+    background-image: url('https://www.aarizedeveloper.com/project_pics/aarize-plots-karnal-banner-18930.jpg'); /* <-- Replace with your image URL */
+    background-size: cover; /* Make image cover the whole section */
+    background-position: center; /* Center the image */
+    background-repeat: no-repeat; /* Prevent image from repeating */
+    position: relative; /* Needed for the overlay */
+    /* --- END OF ADDED LINES --- */
+}
+    .text-gradient { background-image: linear-gradient(to right, #a5b4fc, #818cf8); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .hero-search-container { background: rgba(15, 23, 42, 0.5); backdrop-filter: blur(8px); border: 1px solid var(--border-dark); box-shadow: 0 20px 40px rgba(0,0,0,0.3); }
+    .hero-search-tab.active { color: white; border-color: var(--brand-primary); }
+    .hero-search-input { background-color: transparent; border: none; color: white; }
+    .hero-search-input:focus { outline: none; box-shadow: none; }
+    
+    .plot-card { background-color: var(--card-dark); border-radius: 0.75rem; overflow: hidden; border: 1px solid var(--border-dark); transition: transform 0.3s ease, box-shadow 0.3s ease; position: relative; }
+    .plot-card:hover { transform: translateY(-8px); box-shadow: 0 0 35px rgba(99, 102, 241, 0.2); }
+    .plot-card-image-wrapper { position: relative; aspect-ratio: 16 / 10; cursor: pointer; }
+    .plot-card-image { width: 100%; height: 100%; object-fit: cover; transition: transform .3s ease; }
+    .plot-card:hover .plot-card-image { transform: scale(1.05); }
+    .checkbox-icon { transition: all .2s ease; border: 2px solid var(--text-muted); }
+    .checkbox-icon .ph-check { transform: scale(0.5); opacity: 0; transition: all .2s ease-in-out; }
+    .select-plot-checkbox:checked + .checkbox-icon { background-color: var(--brand-primary); border-color: var(--brand-primary); }
+    .select-plot-checkbox:checked + .checkbox-icon .ph-check { transform: scale(1); opacity: 1; }
+    
+    .modal { transition: opacity .25s ease; }
+    .modal-content { background-color: var(--card-dark); transition: transform .25s ease, opacity .25s ease; }
+    .loader { border: 4px solid var(--border-dark); border-radius: 50%; border-top: 4px solid var(--brand-primary); width: 40px; height: 40px; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+    .form-input { width: 100%; padding: .75rem 1rem; background-color: var(--card-elevated); border: 1px solid var(--border-dark); color: var(--text-light); border-radius: .5rem; transition: border-color .15s ease, box-shadow .15s ease; }
+    .form-input:focus { outline: none; border-color: var(--brand-primary); box-shadow: 0 0 0 3px var(--brand-glow); }
+    .form-label { display: block; font-size: 0.875rem; font-weight: 600; color: var(--text-light); margin-bottom: 0.5rem; }
+
+    .city-filter-btn { transition: all .2s ease; }
+    .city-filter-btn.active { background-color: var(--brand-primary) !important; color: white !important; box-shadow: 0 8px 24px rgba(99, 102, 241, 0.35); }
+    
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .nav-link.active { color: #a5b4fc; font-weight: 700; }
+    
+    .animate-on-scroll { opacity: 0; transform: translateY(20px); transition: opacity 0.6s ease-out, transform 0.6s ease-out; }
+    .animate-on-scroll.in-view { opacity: 1; transform: translateY(0); }
+    
+    .feature-card { background-color: var(--card-elevated); border: 1px solid var(--border-dark); padding: 2rem; border-radius: 1rem; text-align: center; transition: all .3s ease; }
+    .feature-card:hover { transform: translateY(-5px); border-color: var(--brand-primary); box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+    .feature-icon { width: 4rem; height: 4rem; margin: 0 auto; border-radius: 9999px; display: flex; align-items: center; justify-content: center; font-size: 2rem; }
+
+    @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(99, 102, 241, 0); } }
+    .step-circle { transition: all 0.3s ease; }
+    .step.active .step-circle { border-color: var(--brand-primary); background-color: var(--brand-primary); color: white; animation: pulse 2s infinite; box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.7); }
+    .step-label { font-size: 0.875rem; margin-top: 0.5rem; transition: color 0.3s ease; color: #6b7280; }
+    .step.active .step-label { color: white; font-weight: 600; }
+    .step.completed .step-circle { border-color: #16a34a; background-color: #16a34a; color: white; }
+    .step.completed .step-label { color: var(--text-light); }
+    .step:not(:last-child)::after { content: ''; position: absolute; top: 1.25rem; left: 50%; width: 100%; height: 2px; background-color: var(--border-dark); transform: translateY(-50%); z-index: 0; transition: background-color .4s ease; }
+    .step.completed::after { background-color: #16a34a; }
+
+    .drop-area { border: 2px dashed var(--border-dark); padding: 2.5rem 1rem; text-align: center; cursor: pointer; border-radius: 0.75rem; transition: all 0.2s ease; }
+    .drop-area.dragover { border-color: var(--brand-primary); background-color: rgba(99, 102, 241, 0.1); }
+    .drop-area-sm { border: 2px solid var(--border-dark); padding: 1rem; cursor: pointer; border-radius: 0.75rem; transition: all 0.2s ease; }
+    .drop-area-sm:hover { border-color: var(--brand-primary); }
+    .drop-area-sm.dragover { border-color: var(--brand-primary); background-color: rgba(99, 102, 241, 0.1); }
+    .preview-image-container { position: relative; width: 100%; padding-top: 100%; }
+    .preview-image { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 0.5rem; }
+    
+    .gradient-btn { background-image: linear-gradient(to right, #4f46e5, #6366f1, #818cf8); transition: all 0.2s ease; background-size: 200% auto; }
+    .gradient-btn:hover { box-shadow: 0 10px 20px -10px rgba(99, 102, 241, 0.6); background-position: right center; }
+  
+    .chat-bubble-user { background-color: var(--brand-primary); }
+    .chat-bubble-ai { background-color: var(--card-elevated); }
+    .chat-bubble-ai p { margin: 0; }
+    .chat-bubble-ai strong { color: var(--text-light); }
+    .chat-bubble-ai ul { padding-left: 1.25rem; margin-top: 0.5rem; margin-bottom: 0; }
+    .chat-bubble-ai li { margin-bottom: 0.25rem; }
+
+    .category-card { position: relative; border-radius: 0.75rem; overflow: hidden; aspect-ratio: 4 / 3; transition: transform 0.3s ease, box-shadow 0.3s ease; cursor: pointer; }
+    .category-card:hover { transform: translateY(-5px); box-shadow: 0 15px 30px rgba(0,0,0,0.3); }
+    .category-card img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s ease; }
+    .category-card:hover img { transform: scale(1.05); }
+    .category-card-overlay { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,0.8) 20%, transparent 60%); display: flex; flex-direction: column; justify-content: flex-end; padding: 1rem; }
+    
+    @keyframes shimmer {
+      0% { background-position: -1000px 0; }
+      100% { background-position: 1000px 0; }
+    }
+    .shimmer {
+        background: linear-gradient(to right, transparent 0%, #1e293b 50%, transparent 100%);
+        background-size: 2000px 100%;
+        animation: shimmer 2s linear infinite;
+    }
+    .plan-card {
+      background-color: var(--card-elevated);
+      border: 1px solid var(--border-dark);
+      padding: 1.5rem;
+      border-radius: 1rem;
+      display: flex;
+      flex-direction: column;
+    }
+    .plan-card.popular {
+        border-color: var(--brand-primary);
+        box-shadow: 0 0 25px rgba(99, 102, 241, 0.3);
+        position: relative;
+    }
+    .popular-badge {
+      position: absolute;
+      top: -14px;
+      left: 50%;
+      transform: translateX(-50%);
+      background-image: linear-gradient(to right, #a5b4fc, #818cf8);
+      color: white;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 700;
+    }
+    
+    @keyframes float {
+      0% { transform: translateY(0px) translateX(0px) rotate(0deg); opacity: 0; }
+      25% { opacity: 0.7; }
+      50% { transform: translateY(-20px) translateX(10px) rotate(10deg); }
+      75% { opacity: 0.7; }
+      100% { transform: translateY(0px) translateX(0px) rotate(0deg); opacity: 0; }
+    }
+    .login-icon {
+        position: absolute;
+        color: var(--border-dark);
+        animation: float 15s infinite ease-in-out;
+    }
+    .form-input-icon {
+      position: absolute;
+      top: 50%;
+      left: 1rem;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+    }
+
+    .ad-type-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 1.5rem 1rem;
+      background-color: var(--card-elevated);
+      border: 2px solid var(--border-dark);
+      border-radius: 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .listing-type-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 1.5rem 1rem;
+      background-color: var(--card-elevated);
+      border: 2px solid var(--border-dark);
+      border-radius: 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      height: 100%;
+    }
+    .listing-type-card:hover {
+      border-color: var(--brand-primary);
+      background-color: rgba(99, 102, 241, 0.1);
+    }
+    input[type="radio"]:checked + .listing-type-card {
+      border-color: var(--brand-primary);
+      box-shadow: 0 0 0 2px var(--brand-primary);
+    }
+    .ad-type-card:hover {
+      border-color: var(--brand-primary);
+      background-color: rgba(99, 102, 241, 0.1);
+    }
+    input[type="radio"]:checked + .ad-type-card {
+      border-color: var(--brand-primary);
+      box-shadow: 0 0 0 2px var(--brand-primary);
+    }
+    .submit-button-gradient {
+      width: 100%;
+      padding: 0.875rem 0;
+      border-radius: 0.5rem;
+      color: white;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      background-image: linear-gradient(to right, #4f46e5, #6366f1, #818cf8);
+      transition: all 0.2s ease;
+      background-size: 200% auto;
+    }
+    .submit-button-gradient:hover {
+      box-shadow: 0 10px 20px -10px rgba(99, 102, 241, 0.6);
+      background-position: right center;
+    }
+
+    .pac-container {
+        background-color: var(--card-dark);
+        border: 1px solid var(--border-dark);
+        border-radius: 0.5rem;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        z-index: 9999 !important;
+    }
+    .pac-item {
+        padding: 0.75rem;
+        cursor: pointer;
+        color: var(--text-light);
+        border-top: 1px solid var(--border-dark);
+    }
+    .pac-item:first-child { border-top: none; }
+    .pac-item:hover { background-color: var(--card-elevated); }
+    .pac-item-query { font-size: 0.875rem; color: var(--text-light); }
+    .pac-matched { color: var(--brand-primary); font-weight: 600; }
+
+    #user-profile-container { position: relative; }
+    .profile-dropdown {
+        display: none;
+        position: absolute;
+        top: 100%;
+        right: 0;
+        margin-top: 0.5rem;
+        background-color: var(--card-elevated);
+        border: 1px solid var(--border-dark);
+        border-radius: 0.5rem;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        z-index: 50;
+        width: 200px;
+    }
+    .profile-dropdown a, .profile-dropdown button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 0.75rem 1rem;
+        color: var(--text-light);
+        font-size: 0.875rem;
+    }
+    .profile-dropdown a:hover, .profile-dropdown button:hover {
+        background-color: var(--brand-primary);
+        color: white;
+    }
+    .role-card {
+      padding: 2rem 1rem;
+      border: 2px solid var(--border-dark);
+      border-radius: 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .role-card:hover {
+      border-color: var(--brand-primary);
+      background-color: rgba(99, 102, 241, 0.1);
+      transform: translateY(-5px);
+    }
+    
+    /* NEW CSS for Sold Overlay */
+    /* This rule is removed to stop the whole card from fading */
+
+    .sold-overlay {
+      position: absolute;
+      inset: 0;
+      /* The background is now lighter (0.6 instead of 0.7) */
+      background-color: rgba(0, 0, 0, 0.6); 
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 0.75rem;
+      pointer-events: none;
+    }
+    .sold-overlay span {
+      color: white;
+      font-size: 3rem;
+      font-weight: 800;
+      transform: rotate(-15deg);
+      border: 4px solid white;
+      padding: 0.5rem 1.5rem;
+    }
+    /* END NEW CSS */
+
+  </style>
+</head>
+
+<body class="antialiased">
+  <header class="fixed top-0 left-0 right-0 z-40 transition-all duration-300">
+    <nav class="container mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-20">
+        <div class="flex-shrink-0 flex items-center space-x-3">
+          <i class="ph-bold ph-map-trifold text-4xl text-white"></i>
+          <a href="#" class="text-3xl font-extrabold text-white">Avas</a>
+        </div>
+        <div class="hidden md:flex items-center justify-center flex-1 space-x-10 text-lg font-semibold">
+          <a href="#plots" id="plots-nav-link" class="nav-link text-white hover:text-indigo-300">Plots</a>
+          <a href="#plots" id="land-nav-link" class="nav-link text-white hover:text-indigo-300">Land</a>
+          <a href="#" id="advertise-btn" class="text-white hover:text-indigo-300 cursor-pointer">Advertise</a>
+          <a href="#" id="subscription-btn" class="text-white hover:text-indigo-300 cursor-pointer">Subscription</a>
+        </div>
+        <div class="flex items-center space-x-2">
+          <button id="add-plot-btn" class="px-4 py-2 text-sm font-semibold bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors flex items-center gap-2">
+            <i class="ph-bold ph-plus-circle"></i> Add Plot
+          </button>
+          <div id="auth-container">
+            <button id="login-btn" class="sm:inline-flex items-center justify-center px-5 py-2.5 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+              Login
+            </button>
+          </div>
+          <div id="user-profile-container" class="hidden"></div>
+          </div>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero-section" style="background-image: url('https://www.aarizedeveloper.com/project_pics/aarize-plots-karnal-banner-18930.jpg'); background-size: cover; background-position: center; background-repeat: no-repeat; position: relative;">
+    <!-- ADDED THIS OVERLAY DIV -->
+    <div class="absolute inset-0 bg-black/60 z-0"></div>
+    <!-- END OF ADDED OVERLAY DIV -->
+
+    <!-- Added relative z-10 to this container -->
+    <div class="container mx-auto px-4 sm:px-6 lg:px-8 text-center flex flex-col items-center relative z-10">
+        <h1 class="text-4xl md:text-6xl font-extrabold leading-tight text-white animate-on-scroll in-view">
+            The Smartest Way to <span class="text-gradient">Find Your Land</span>
+        </h1>
+        <p class="mt-6 text-lg md:text-xl text-slate-300 max-w-2xl mx-auto animate-on-scroll in-view" style="animation-delay: 200ms;">Avas uses AI to analyze thousands of listings, helping you find the perfect plot for your future.</p>
+        <div class="hero-search-container mt-10 w-full max-w-4xl rounded-full p-2 animate-on-scroll in-view" style="animation-delay: 400ms;">
+            <div class="flex items-center">
+                <div id="search-tabs" class="flex items-center pl-4 pr-2">
+                    <button class="hero-search-tab whitespace-nowrap py-2 px-4 text-sm sm:text-base font-semibold text-slate-300 border-b-2 border-transparent transition-all duration-200 active" data-type="Buy">Buy</button>
+                    <button class="hero-search-tab whitespace-nowrap py-2 px-4 text-sm sm:text-base font-semibold text-slate-300 border-b-2 border-transparent transition-all duration-200" data-type="Rent">Rent</button>
+                    <button class="hero-search-tab whitespace-nowrap py-2 px-4 text-sm sm:text-base font-semibold text-slate-300 border-b-2 border-transparent transition-all duration-200" data-type="Sell">Sell</button>
+                </div>
+                <form id="city-search-form" class="flex-grow flex items-center">
+                    <div class="relative flex-grow">
+                        <i class="ph-bold ph-map-pin absolute top-1/2 left-4 -translate-y-1/2 text-slate-400 text-xl"></i>
+                        <input type="text" id="city-search-input" placeholder="Search by City, Location, or Zip..." class="w-full pl-12 pr-4 py-4 hero-search-input placeholder-slate-400 focus:ring-0 text-lg">
+                    </div>
+                    <button type="submit" class="p-3.5 rounded-full font-semibold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors">
+                        <i class="ph-bold ph-magnifying-glass text-2xl"></i>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</section>
+
+    <section id="features" class="py-20">
+        <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-12">
+                <h2 class="text-3xl md:text-4xl font-bold text-white">A Smarter Way to Find Land</h2>
+                <p class="mt-4 text-lg text-slate-400 max-w-2xl mx-auto">We leverage technology to give you a competitive edge in the real estate market.</p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div class="feature-card animate-on-scroll">
+                    <div class="feature-icon bg-indigo-500/10 text-indigo-400"><i class="ph-bold ph-brain"></i></div>
+                    <h3 class="text-xl font-bold mt-4 text-white">AI-Powered Insights</h3>
+                    <p class="text-slate-400 mt-2">Get AI-generated summaries, price trend analyses, and Vastu scores to make informed decisions faster.</p>
+                </div>
+                <div class="feature-card animate-on-scroll" style="animation-delay: 200ms;">
+                    <div class="feature-icon bg-green-500/10 text-green-400"><i class="ph-bold ph-shield-check"></i></div>
+                    <h3 class="text-xl font-bold mt-4 text-white">Verified Listings</h3>
+                    <p class="text-slate-400 mt-2">Browse with confidence. Our AI-assisted document verification helps ensure listings are authentic and trustworthy.</p>
+                </div>
+                <div class="feature-card animate-on-scroll" style="animation-delay: 400ms;">
+                    <div class="feature-icon bg-sky-500/10 text-sky-400"><i class="ph-bold ph-map-trifold"></i></div>
+                    <h3 class="text-xl font-bold mt-4 text-white">Seamless Experience</h3>
+                    <p class="text-slate-400 mt-2">From an intuitive map-based search to a simple 4-step listing process, Avas is designed for ease of use.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="plots" class="py-16 bg-slate-900/20">
+      <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+        <h2 id="browse-heading" class="text-3xl font-bold text-white mb-8">Featured Listings</h2>
+        <div id="category-browser" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-12"></div>
+        <div id="city-filter" class="flex justify-center flex-wrap gap-3 mb-10"></div>
+        <div id="plot-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8"></div>
+      </div>
+    </section>
+  </main>
+   <footer class="bg-card-dark border-t border-border-dark py-16">
+    <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-8 mb-12">
+        
+        <div>
+          <div class="flex-shrink-0 flex items-center space-x-3 mb-4">
+            <i class="ph-bold ph-map-trifold text-4xl text-white"></i>
+            <a href="#" class="text-3xl font-extrabold text-white">Avas</a>
+          </div>
+          <p class="text-slate-400 text-sm max-w-xs">
+            AI-powered real estate analysis to help you find the perfect plot.
+          </p>
+        </div>
+        
+        <div>
+          <h4 class="text-lg font-semibold text-white mb-4">Quick Links</h4>
+          <ul class="space-y-3">
+            <li><a href="#plots" class="text-slate-400 hover:text-indigo-300 transition-colors">Plots</a></li>
+            <li><a href="#plots" class="text-slate-400 hover:text-indigo-300 transition-colors">Land</a></li>
+            <li><a href="#" class="text-slate-400 hover:text-indigo-300 transition-colors" onclick="openAdvertiseModal()">Advertise</a></li>
+            <li><a href="#" class="text-slate-400 hover:text-indigo-300 transition-colors" onclick="openSubscriptionModal()">Subscription</a></li>
+          </ul>
+        </div>
+        
+         <div>
+          <h4 class="text-lg font-semibold text-white mb-4">Legal & Company</h4>
+          <ul class="space-y-3">
+            <li><a href="company.html#terms" target="_blank" rel="noopener noreferrer" class="text-slate-400 hover:text-indigo-300 transition-colors">Terms of Service</a></li>
+            <li><a href="company.html#privacy" target="_blank" rel="noopener noreferrer" class.="text-slate-400 hover:text-indigo-300 transition-colors">Privacy Policy</a></li>
+            <li><a href="company.html#about" target="_blank" rel="noopener noreferrer" class.="text-slate-400 hover:text-indigo-300 transition-colors">About Us</a></li>
+            <li><a href="company.html#contact" target="_blank" rel="noopener noreferrer" class.="text-slate-400 hover:text-indigo-300 transition-colors">Contact Us</a></li>
+          </ul>
+          
+        </div>
+        
+        <div>
+          <h4 class="text-lg font-semibold text-white mb-4">Follow Us</h4>
+          <div class="flex space-x-4">
+            <a href="#" aria-label="Twitter" class="text-slate-400 hover:text-indigo-300 transition-colors text-2xl"><i class="ph-bold ph-twitter-logo"></i></a>
+            <a href="#" aria-label="LinkedIn" class="text-slate-400 hover:text-indigo-300 transition-colors text-2xl"><i class="ph-bold ph-linkedin-logo"></i></a>
+            <a href="#" aria-label="Facebook" class_="_tailwind_class_8 _tailwind_class_9 _tailwind_class_10 _tailwind_class_11"><i class="ph-bold ph-facebook-logo"></i></a>
+            <a href="#" aria-label="Instagram" class_="_tailwind_class_8 _tailwind_class_9 _tailwind_class_10 _tailwind_class_11"><i class="ph-bold ph-instagram-logo"></i></a>
+          </div>
+        </div>
+        
+      </div>
+      <hr class="border-border-dark mb-3">
+      <div class="text-base text-white-300 text-sm">
+        &copy; 2025 Avasplot All rights reserved.
+      </div>
+    </div>
+  </footer>
+
+
+  <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 bg-[#111827]/80 backdrop-blur-lg p-2 rounded-full shadow-lg flex items-center space-x-1 border border-slate-700">
+    <button id="summarize-btn" class="px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700 rounded-full flex items-center gap-2" disabled><i class="ph-bold ph-sparkle"></i> Summarize (0)</button>
+    <button id="best-value-btn" class="px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700 rounded-full flex items-center gap-2" disabled><i class="ph-bold ph-tag"></i> Best Value (0)</button>
+    <button id="compare-btn" class="px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700 rounded-full flex items-center gap-2" disabled><i class="ph-bold ph-git-compare"></i> Compare (0/2)</button>
+    <div id="feedback-toast" class="text-sm font-semibold absolute -top-12 left-1/2 -translate-x-1/2 w-max px-4 py-2 rounded-md shadow-lg opacity-0 transition-all duration-300"></div>
+  </div>
+
+  <button onclick="toggleChat()" class="fixed bottom-6 right-6 z-50 bg-indigo-600 text-white p-5 rounded-full shadow-lg hover:bg-indigo-700 transition-transform hover:scale-110">
+    <i class="ph-fill ph-chats text-3xl"></i>
+  </button>
+
+  <div id="chat-window" class="hidden"></div>
+
+  <div id="modal-wrapper" class="modal fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 backdrop-blur-sm opacity-0 pointer-events-none">
+    <div class="modal-content rounded-2xl shadow-xl w-11/12 md:max-w-4xl mx-auto transform opacity-0 -translate-y-4">
+      <div class="flex justify-between items-center p-4 border-b border-slate-800">
+        <h3 id="modal-title" class="text-2xl font-bold"></h3>
+        <button id="modal-close-btn" class="text-slate-400 hover:text-white text-3xl">&times;</button>
+      </div>
+      <div id="modal-body" class="p-6 max-h-[80vh] overflow-y-auto"></div>
+    </div>
+  </div>
+
+  <template id="plot-card-template">
+    <div class="plot-card">
+      <div class="plot-card-image-wrapper" onclick="openPlotDetailModal('{id}')">
+        <img src="{image_url}" class="plot-card-image" alt="Plot in {location}" onerror="this.onerror=null;this.src='https://placehold.co/600x400/1e293b/e2e8f0?text=Image+Not+Found'">
+        <div class="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent"></div>
+        <div class="absolute top-3 left-3 flex gap-2">
+          {tags}
+        </div>
+        <div class="absolute top-3 right-3">
+            <label class="flex items-center" onclick="event.stopPropagation()">
+                <input type="checkbox" data-id="{id}" class="select-plot-checkbox sr-only">
+                <div class="checkbox-icon flex items-center justify-center w-8 h-8 cursor-pointer bg-black/40 backdrop-blur-sm rounded-md text-white hover:bg-black/60">
+                    <i class="ph-bold ph-check text-xl"></i>
+                </div>
+            </label>
+        </div>
+      </div>
+      <div class="p-4">
+        <div class="flex justify-between items-center">
+          <p class="text-xs font-semibold text-indigo-400">{property_type}</p>
+          <button class="ask-ai-btn p-1.5 rounded-md hover:bg-slate-700 text-slate-400 hover:text-indigo-300" data-id="{id}">
+            <i class="ph-bold ph-chat-circle-dots text-xl"></i>
+          </button>
+        </div>
+        <p class="text-2xl font-bold text-white mt-1">{price}</p>
+        <p class="text-slate-400 mt-2">{area_sqft} sqft • {location}</p>
+        <p class="text-slate-500 text-sm">{city}</p>
+        <div class="owner-actions mt-3"></div>
+      </div>
+    </div>
+  </template>
+
+  <template id="new-login-template">
+    <div class="relative w-full h-full flex items-center justify-center p-4" style="background-color: var(--bg-dark);">
+        <button id="login-close-btn" class="absolute top-6 right-8 text-slate-200 hover:text-white text-4xl z-20">&times;</button>
+        <div class="w-full max-w-4xl bg-card-dark rounded-2xl shadow-2xl flex overflow-hidden border border-border-dark z-10">
+            <div class="w-full md:w-1/2 p-8 md:p-12 flex flex-col justify-center">
+                <div class="mb-8">
+                    <h2 id="title" class="text-3xl font-bold text-white">Welcome to Avas</h2>
+                    <p id="subtitle" class="text-slate-400 mt-2">Sign in or create an account to continue.</p>
+                </div>
+                <form id="auth-form" class="space-y-4">
+                    <div>
+                        <label for="email" class="font-semibold text-slate-300">Email Address</label>
+                        <div class="relative mt-2">
+                            <i class="ph-bold ph-envelope form-input-icon"></i>
+                            <input type="email" id="email" placeholder="you@example.com" class="form-input pl-12" required>
+                        </div>
+                    </div>
+                    <div id="signup-fields" class="hidden space-y-4">
+                        <div>
+                            <label for="name" class="font-semibold text-slate-300">Full Name</label>
+                            <div class="relative mt-2">
+                                <i class="ph-bold ph-user form-input-icon"></i>
+                                <input type="text" id="name" placeholder="Name" class="form-input pl-12">
+                            </div>
+                        </div>
+                         <div>
+                            <label for="mobile" class="font-semibold text-slate-300">Mobile Number</label>
+                            <div class="relative mt-2">
+                                <i class="ph-bold ph-phone form-input-icon"></i>
+                                <input type="tel" id="mobile" placeholder="98765 43210" class="form-input pl-12">
+                            </div>
+                        </div>
+                    </div>
+                     <div>
+                        <label for="password" class="font-semibold text-slate-300">Password</label>
+                          <div class="relative mt-2">
+                            <i class="ph-bold ph-lock form-input-icon"></i>
+                            <input type="password" id="password" placeholder="••••••••" class="form-input pl-12" required>
+                        </div>
+                    </div>
+                    
+                    <p id="message" class="text-center text-red-400 text-sm h-5"></p>
+                    <button id="submitBtn" type="submit" class="w-full py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">Continue</button>
+                    
+                    <div class="text-center text-sm text-slate-400">
+                        <a href="#" id="toggle-auth-mode-btn" class="font-semibold text-indigo-400 hover:underline">Don't have an account? Sign Up</a>
+                    </div>
+                </form>
+                
+                <div class="relative flex py-4 items-center">
+                    <div class="flex-grow border-t border-border-dark"></div>
+                    <span class="flex-shrink mx-4 text-slate-400">OR</span>
+                    <div class="flex-grow border-t border-border-dark"></div>
+                </div>
+                <div class="space-y-3">
+                    <button id="google-signin-btn" type="button" class="w-full flex items-center justify-center gap-3 py-3 border border-border-dark rounded-lg hover:bg-slate-800 transition-colors">
+                        <svg class="w-6 h-6" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C12.955 4 4 12.955 4 24s8.955 20 20 20s20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"></path><path fill="#FF3D00" d="m6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C16.318 4 9.656 8.337 6.306 14.691z"></path><path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"></path><path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303c-.792 2.237-2.231 4.166-4.087 5.571l6.19 5.238C42.021 35.596 44 30.138 44 24c0-1.341-.138-2.65-.389-3.917z"></path></svg>
+                        <span class="font-semibold text-white">Sign in with Google</span>
+                    </button>
+                </div>
+
+            </div>
+            <div class="hidden md:block md:w-1/2 relative overflow-hidden">
+                <div id="login-visual" class="absolute inset-0">
+                </div>
+            </div>
+        </div>
+    </div>
+  </template>
+  
+  <template id="chat-modal-template">
+    <div class="flex flex-col h-full">
+        <div id="chat-context" class="p-2 border-b border-slate-700 text-xs text-center text-slate-400 hidden flex-shrink-0"></div>
+        <div id="chat-box" class="flex-grow p-4 overflow-y-auto space-y-4"></div>
+        <div id="chat-starters" class="p-4 border-t border-slate-700 grid grid-cols-2 gap-2 flex-shrink-0"></div>
+        <div class="p-4 border-t border-slate-700 flex-shrink-0">
+          <div class="relative">
+            <input type="text" id="chat-input" class="form-input pr-12" placeholder="Ask about plots, investments...">
+            <button id="chat-send-btn" class="absolute top-1/2 right-2 -translate-y-1/2 bg-indigo-600 text-white p-2 rounded-full hover:bg-indigo-700"><i class="ph-fill ph-paper-plane-tilt"></i></button>
+          </div>
+        </div>
+    </div>
+  </template>
+
+  <template id="plot-detail-template">
+    <div class="p-4 sm:p-8 relative">
+        <button id="detail-close-btn" class="fixed top-6 left-8 text-white bg-black/30 backdrop-blur-sm hover:bg-black/50 p-3 rounded-full z-50 transition-colors">
+            <i class="ph-bold ph-arrow-left text-2xl"></i>
+        </button>
+        <div class="grid grid-cols-1 lg:grid-cols-5 gap-8">
+            <div class="lg:col-span-3">
+                <img id="plot-detail-img" src="" class="w-full h-96 object-cover rounded-lg shadow-lg mb-8" alt="Plot photo">
+                 <div id="plot-detail-thumbnails" class="grid grid-cols-5 gap-2 mt-2">
+               </div>
+                <h3 class="text-2xl font-bold flex items-center gap-2 mb-4 text-white"><i class="ph-bold ph-chart-line-up text-indigo-400"></i>AI Price Trends</h3>
+                <div class="p-4 bg-slate-800/50 rounded-lg h-64">
+                    <canvas id="price-trend-chart"></canvas>
+                </div>
+            </div>
+            <div class="lg:col-span-2">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <h2 id="plot-detail-location" class="text-3xl font-bold text-white"></h2>
+                        <p id="plot-detail-city" class="text-slate-400 text-lg"></p>
+                    </div>
+                    <div id="plot-detail-verified-badge"></div>
+                </div>
+                <p id="plot-detail-price" class="text-4xl font-bold text-gradient my-6"></p>
+                <div class="p-4 rounded-lg bg-slate-800/50 border border-slate-700">
+                    <h4 class="font-bold text-lg text-slate-300 flex items-center gap-2"><i class="ph-bold ph-brain text-indigo-400"></i>AI-Generated Summary</h4>
+                    <p id="ai-summary" class="text-slate-400 mt-2 text-sm leading-relaxed"></p>
+                </div>
+                <div class="grid grid-cols-2 gap-4 mt-6">
+                    <div class="p-4 rounded-lg bg-green-900/50 border border-green-500/50 text-center">
+                        <h4 class="font-semibold text-green-300">AI Price Growth (5 Yrs)</h4>
+                        <p id="plot-detail-prediction" class="text-2xl font-bold text-white mt-1"></p>
+                    </div>
+                    <div class="p-4 rounded-lg bg-yellow-900/50 border border-yellow-500/50 text-center">
+                        <h4 class="font-semibold text-yellow-300">AI Vastu Score</h4>
+                        <p id="vastu-score" class="text-2xl font-bold text-white mt-1"></p>
+                    </div>
+                </div>
+                <div id="contact-seller-section" class="mt-6"></div>
+            </div>
+        </div>
+        <div class="mt-12">
+            <h3 class="text-2xl font-bold flex items-center gap-2 mb-4 text-white"><i class="ph-bold ph-map-pin-line text-indigo-400"></i>What's Nearby</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mt-4">
+                <div id="neighborhood-map" class="w-full h-80 rounded-lg border border-slate-700"></div>
+                <div id="neighborhood-list" class="space-y-3"></div>
+            </div>
+        </div>
+    </div>
+  </template>
+
+  <template id="subscription-modal-template">
+    <div class="p-2 sm:p-4">
+      <div class="text-center mb-6">
+        <h2 class="text-3xl font-bold text-white">Unlock Your Potential</h2>
+        <p class="text-slate-400 mt-2">Choose the plan that's right for you and get access to exclusive AI-powered features.</p>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="plan-card">
+          <h3 class="text-2xl font-semibold">Free</h3>
+          <p class="text-slate-400 text-sm mt-1">For casual browsing</p>
+          <p class="text-4xl font-extrabold my-4">₹0</p>
+          <ul class="space-y-3 text-slate-300 text-sm flex-grow">
+            <li class="flex items-center gap-3"><i class="ph-bold ph-check-circle text-green-500"></i> Basic Plot Search</li>
+            <li class="flex items-center gap-3"><i class="ph-bold ph-check-circle text-green-500"></i> limited AI Analyses</li>
+            <li class="flex items-center gap-3"><i class="ph-bold ph-x-circle text-red-500"></i> No Ads</li>
+            <li class="flex items-center gap-3"><i class="ph-bold ph-x-circle text-red-500"></i> Seller Contact Info</li>
+          </ul>
+          <button data-plan="free" class="plan-btn mt-6 w-full py-3 bg-slate-700 text-white font-semibold rounded-lg hover:bg-slate-600 transition-colors">Continue with Free</button>
+        </div>
+        <div class="plan-card popular">
+          <div class="popular-badge">Most Popular</div>
+          <h3 class="text-2xl font-semibold">Enterprise</h3>
+          <p class="text-slate-400 text-sm mt-1">For serious buyers & agents</p>
+          <p class="text-4xl font-extrabold my-4">₹599 <span class="text-lg font-medium text-slate-400">/mo</span></p>
+          <ul class="space-y-3 text-slate-300 text-sm flex-grow">
+            <li class="flex items-center gap-3"><i class="ph-bold ph-check-circle text-green-500"></i> Advanced AI Search</li>
+            <li class="flex items-center gap-3"><i class="ph-bold ph-check-circle text-green-500"></i> Unlimited AI Analyses</li>
+            <li class="flex items-center gap-3"><i class="ph-bold ph-check-circle text-green-500"></i> Ad-Free Experience</li>
+            <li class="flex items-center gap-3"><i class="ph-bold ph-check-circle text-green-500"></i> Seller Contact Info</li>
+            <li class="flex items-center gap-3"><i class="ph-bold ph-check-circle text-green-500"></i> Priority Support</li>
+          </ul>
+          <button data-plan="enterprise" class="plan-btn mt-6 w-full py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">Choose Enterprise</button>
+        </div>
+        <div class="plan-card">
+          <h3 class="text-2xl font-bold">Pro</h3>
+          <p class="text-slate-400 text-sm mt-1">For builders & businesses</p>
+          <p class="text-4xl font-extrabold my-4">₹899 <span class="text-lg font-medium text-slate-400">/mo</span></p>
+          <ul class="space-y-3 text-slate-300 text-sm flex-grow">
+            <li class="flex items-center gap-3"><i class="ph-bold ph-check-circle text-green-500"></i> All Enterprise Features</li>
+            <li class="flex items-center gap-3"><i class="ph-bold ph-check-circle text-green-500"></i> Unlimited AI Analyses</li>
+            <li class="flex items-center gap-3"><i class="ph-bold ph-check-circle text-green-500"></i> Advanced Listing Analytics</li>
+            <li class="flex items-center gap-3"><i class="ph-bold ph-check-circle text-green-500"></i> 4x ad boosting</li>
+          </ul>
+          <button data-plan="pro" class="plan-btn mt-6 w-full py-3 bg-slate-700 text-white font-semibold rounded-lg hover:bg-slate-600 transition-colors">Choose Pro</button>
+        </div>
+      </div>
+    </div>
+  </template>
+  
+  <template id="advertise-modal-template">
+    <div class="p-2 sm:p-4">
+      <div class="text-center mb-8">
+        <i class="ph-bold ph-rocket-launch text-5xl text-indigo-400"></i>
+        <h2 class="text-3xl font-bold text-white mt-2">Reach Your Target Audience</h2>
+        <p class="text-slate-400 mt-2 max-w-2xl mx-auto">Promote your listings on Avas to connect with thousands of serious buyers, agents, and investors across the nation.</p>
+      </div>
+      <form id="adv-form" class="max-w-2xl mx-auto space-y-8">
+        <div>
+            <label class="block text-lg font-semibold text-white mb-4 text-center sm:text-left">1. Select Ad Type</label>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <label>
+                <input type="radio" name="ad_type" value="featured" class="sr-only" checked>
+                 <div class="ad-type-card">
+                    <i class="ph-bold ph-star text-3xl text-amber-400"></i>
+                    <span class="font-semibold text-white">Featured Plot</span>
+                    <p class="text-xs text-slate-400">Top of search results</p>
+                </div>
+              </label>
+              <label>
+                <input type="radio" name="ad_type" value="banner" class="sr-only">
+                 <div class="ad-type-card">
+                    <i class="ph-bold ph-image text-3xl text-cyan-400"></i>
+                    <span class="font-semibold text-white">Homepage Banner</span>
+                    <p class="text-xs text-slate-400">Maximum visibility</p>
+                </div>
+              </label>
+              <label>
+                <input type="radio" name="ad_type" value="social" class="sr-only">
+                <div class="ad-type-card">
+                    <i class="ph-bold ph-share-network text-3xl text-pink-400"></i>
+                    <span class="font-semibold text-white">Social Promotion</span>
+                    <p class="text-xs text-slate-400">Reach a wider audience</p>
+                </div>
+              </label>
+            </div>
+        </div>
+        <div>
+            <label class="block text-lg font-semibold text-white mb-4 text-center sm:text-left">2. Contact Information</label>
+            <div class="p-6 bg-slate-800/50 rounded-lg border border-slate-700 space-y-5">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5">
+                  <div>
+                      <label for="contact_name" class="form-label">Your Full Name</label>
+                      <input type="text" id="contact_name" name="contact_name" class="form-input" placeholder="e.g., Jane Doe" required>
+                  </div>
+                  <div>
+                      <label for="contact_email" class="form-label">Email Address</label>
+                      <div class="relative">
+                        <i class="ph-bold ph-envelope absolute top-1/2 left-4 -translate-y-1/2 text-slate-400"></i>
+                        <input type="email" id="contact_email" name="contact_email" class="form-input pl-12" placeholder="e.g., jane.doe@example.com" required>
+                      </div>
+                  </div>
+              </div>
+              <div>
+                  <label for="description" class="form-label">Describe Your Needs</label>
+                  <textarea id="description" name="description" rows="4" class="form-input" placeholder="Briefly describe your property, advertising goals..."></textarea>
+              </div>
+            </div>
+        </div>
+        <div>
+            <button type="submit" class="submit-button-gradient">
+              <i class="ph-bold ph-paper-plane-tilt"></i>
+              Submit Inquiry
+            </button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template id="add-plot-template">
+    <div id="step-indicator" class="flex justify-between items-start w-full max-w-lg mx-auto mb-8 px-2"></div>
+    <form id="add-plot-form" class="px-2">
+      <div class="form-step" data-step="1">
+        <div class="text-center mb-8">
+            <h3 class="text-2xl font-bold text-white">List a New Property</h3>
+            <p class="text-slate-400">Step 1: Provide Basic Details</p>
+        </div>
+        
+        <div class="max-w-lg mx-auto grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+            
+            <div class="sm:col-span-2">
+              <label class="form-label text-center">I want to...</label>
+              <div class="grid grid-cols-2 gap-4">
+                <label>
+                  <input type="radio" name="listing_type" value="For Sale" class="sr-only" checked>
+                  <div class="listing-type-card">
+                    <i class="ph-bold ph-tag text-3xl text-green-400"></i>
+                    <span class="font-semibold text-white">Sell the Property</span>
+                  </div>
+                </label>
+                <label>
+                  <input type="radio" name="listing_type" value="For Rent" class="sr-only">
+                  <div class="listing-type-card">
+                    <i class="ph-bold ph-key text-3xl text-cyan-400"></i>
+                    <span class="font-semibold text-white">Rent it Out</span>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div>
+              <label for="location" class="form-label">Location Name</label>
+              <input type="text" id="location" name="location" class="form-input" placeholder="e.g., Hinjawadi" required>
+            </div>
+
+            <div>
+              <label for="city" class="form-label">City</label>
+              <input type="text" id="city" name="city" class="form-input" placeholder="e.g., Nagpur" required>
+            </div>
+            
+            <div>
+                <label for="property_type" class="form-label">Type of Plot</label>
+                <select id="property_type" name="property_type" class="form-input" required><option value="">Select Type</option><option>Residential</option><option>Commercial</option><option>Agricultural</option></select>
+            </div>
+
+            <div>
+                <label for="nearby" class="form-label">Nearby Landmark</label>
+                <input type="text" id="nearby" name="nearby" class="form-input" placeholder="e.g., Near Wipro Circle">
+            </div>
+
+            <div>
+                <label for="area_sqft" class="form-label">Area</label>
+                <div class="relative">
+                  <i class="ph-bold ph-arrows-out-simple absolute top-1/2 left-4 -translate-y-1/2 text-slate-400"></i>
+                  <input type="number" id="area_sqft" name="area_sqft" class="form-input pl-12" placeholder="in Sq.Ft." required>
+                </div>
+            </div>
+
+            <div>
+                <label for="price" class="form-label">Price</label>
+                <div class="relative">
+                    <span class="absolute top-1/2 left-4 -translate-y-1/2 text-slate-400 font-bold">₹</span>
+                  <input type="text" id="price" name="price" class="form-input pl-9" placeholder="e.g., 75 Lakhs" required>
+                </div>
+            </div>
+            
+            </div>
+        
+
+        <div class="max-w-lg mx-auto">
+            <button type="button" class="w-full mt-8 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 next-btn" data-next="2">Next: Set Location →</button>
+        </div>
+      </div>
+      <div class="form-step hidden" data-step="2">
+        <div class="text-center mb-6">
+            <h3 class="text-2xl font-bold text-white">Step 2: Pin Location on Map</h3>
+            <p class="text-slate-400 text-sm">Search or drag the pin to set the exact location.</p>
+        </div>
+        <input type="text" id="location-search-input" class="form-input w-full max-w-lg mx-auto mb-4" placeholder="Search for a location...">
+        <div id="map" class="w-full h-80 rounded-lg border border-slate-700 my-6"></div>
+        <div class="flex gap-4 max-w-lg mx-auto">
+          <button type="button" class="w-full py-3 bg-slate-700 text-white font-semibold rounded-lg hover:bg-slate-600 prev-btn" data-prev="1">← Previous</button>
+          <button type="button" class="w-full py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 next-btn" data-next="3">Next: Upload Images →</button>
+        </div>
+      </div>
+
+      <div class="form-step hidden" data-step="3">
+         <div class="text-center mb-6">
+            <h3 class="text-2xl font-bold text-white">Step 3: Upload Plot Images</h3>
+            <p class="text-slate-400 text-sm">Add up to 5 images of your property.</p>
+        </div>
+        <div id="image-drop-area" class="drop-area">
+          <i class="ph-bold ph-images text-4xl text-indigo-400"></i>
+          <p class="mt-2 text-slate-400">Drag & drop images here, or <span class="text-indigo-400 font-semibold">click to browse</span></p>
+          <input type="file" id="image-input" accept="image/*" class="hidden" multiple>
+        </div>
+        <div id="image-preview-area" class="grid grid-cols-3 sm:grid-cols-5 gap-4 mt-4 min-h-[80px]"></div>
+        <div class="flex gap-4 mt-6 max-w-lg mx-auto">
+          <button type="button" class="w-full py-3 bg-slate-700 text-white font-semibold rounded-lg hover:bg-slate-600 prev-btn" data-prev="2">← Previous</button>
+          <button type="button" class="w-full py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 next-btn" data-next="4">Next: Verification →</button>
+        </div>
+      </div>
+
+      <div class="form-step hidden" data-step="4">
+        <div class="text-center mb-6">
+            <h3 class="text-2xl font-bold text-white">Step 4: AI Document Verification</h3>
+            <p class="text-sm text-slate-400">Upload documents to get a "Verified" badge and build trust.</p>
+        </div>
+        <div class="space-y-4 max-w-lg mx-auto">
+           <div id="aadhaar-drop-area" class="drop-area-sm">
+             <div class="flex items-center gap-3"><i class="ph-bold ph-identification-card text-3xl text-indigo-400"></i>
+             <div><p class="font-semibold text-white">Upload Aadhaar Card</p><p id="aadhaar-file-name" class="text-xs text-slate-400">Drag & drop or click</p></div></div>
+             <input type="file" id="aadhaar-input" class="hidden" accept="image/*,application/pdf">
+           </div>
+           <div id="sev-twelve-drop-area" class="drop-area-sm">
+             <div class="flex items-center gap-3"><i class="ph-bold ph-file-text text-3xl text-indigo-400"></i>
+             <div><p class="font-semibold text-white">Upload 7/12 Extract</p><p id="sev-twelve-file-name" class="text-xs text-slate-400">Drag & drop or click</p></div></div>
+             <input type="file" id="sev-twelve-input" class="hidden" accept="image/*,application/pdf">
+           </div>
+        </div>
+        <div id="ai-verification-status" class="mt-4 text-center h-6"></div>
+        <div id="upload-progress-container" class="mt-4 max-w-lg mx-auto hidden">
+            <div class="w-full bg-slate-700 rounded-full h-2.5">
+                <div id="upload-progress-bar" class="bg-indigo-600 h-2.5 rounded-full" style="width: 0%; transition: width 0.3s ease;"></div>
+            </div>
+        </div>
+        <div class="flex gap-4 mt-6 max-w-lg mx-auto">
+          <button type="button" class="w-full py-3 bg-slate-700 text-white font-semibold rounded-lg hover:bg-slate-600 prev-btn" data-prev="3">← Previous</button>
+          <button type="submit" class="w-full py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 flex items-center justify-center gap-2">
+            <span id="submit-text">Verify with AI & Submit</span>
+            <div id="submit-loader" class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin hidden"></div>
+          </button>
+        </div>
+      </div>
+    </form>
+  </template>
+
+  <template id="ai-analysis-loading-template">
+    <div class="p-4 sm:p-8 relative min-h-[50vh] flex flex-col items-center justify-center">
+        <button onclick="closeModal()" class="fixed top-6 left-8 text-white bg-black/30 backdrop-blur-sm hover:bg-black/50 p-3 rounded-full z-50 transition-colors">
+            <i class="ph-bold ph-arrow-left text-2xl"></i>
+        </button>
+        <div class="flex items-center gap-4 text-2xl font-semibold text-white">
+            <i class="ph-bold ph-brain text-4xl text-indigo-400 animate-pulse"></i>
+            <span>AI is Analyzing...</span>
+        </div>
+        <p class="text-slate-400 mt-2">This may take a few moments.</p>
+        <div class="w-full max-w-md mt-8 space-y-4">
+            <div class="h-8 w-3/4 bg-slate-800 rounded shimmer mx-auto"></div>
+            <div class="h-4 w-full bg-slate-800 rounded shimmer"></div>
+            <div class="h-4 w-5/6 bg-slate-800 rounded shimmer"></div>
+            <div class="h-4 w-full bg-slate-800 rounded shimmer"></div>
+        </div>
+    </div>
+  </template>
+
+  <template id="ai-comparison-template">
+     <div class="p-4 sm:p-8 relative">
+        <button onclick="closeModal()" class="fixed top-6 left-8 text-white bg-black/30 backdrop-blur-sm hover:bg-black/50 p-3 rounded-full z-50 transition-colors">
+            <i class="ph-bold ph-arrow-left text-2xl"></i>
+        </button>
+        <div class="text-center mb-8">
+            <h2 class="text-3xl font-bold text-white">AI Plot Comparison</h2>
+            <p class="text-slate-400 mt-2">Here's a side-by-side analysis of the selected properties.</p>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8" id="comparison-columns">
+           </div>
+        <div class="bg-card-elevated p-6 rounded-lg border border-border-dark">
+            <h3 class="text-xl font-bold text-white flex items-center gap-2"><i class="ph-bold ph-sparkle text-amber-400"></i>AI Recommendation</h3>
+            <div class="text-slate-300 mt-2 prose prose-invert max-w-none" id="ai-recommendation"></div>
+        </div>
+     </div>
+  </template>
+
+  <template id="ai-summary-template">
+     <div class="p-4 sm:p-8 relative">
+        <button onclick="closeModal()" class="fixed top-6 left-8 text-white bg-black/30 backdrop-blur-sm hover:bg-black/50 p-3 rounded-full z-50 transition-colors">
+            <i class="ph-bold ph-arrow-left text-2xl"></i>
+        </button>
+        <div class="text-center mb-8">
+            <h2 class="text-3xl font-bold text-white">AI Summary</h2>
+            <p class="text-slate-400 mt-2" id="summary-location"></p>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8 text-center" id="summary-highlights">
+           </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+            <div id="summary-pros">
+                <h3 class="text-xl font-bold text-white flex items-center gap-2 mb-3"><i class="ph-bold ph-check-circle text-green-400"></i>Pros</h3>
+                <ul class="space-y-2"></ul>
+            </div>
+            <div id="summary-cons">
+                 <h3 class="text-xl font-bold text-white flex items-center gap-2 mb-3"><i class="ph-bold ph-x-circle text-red-400"></i>Cons</h3>
+                <ul class="space-y-2"></ul>
+            </div>
+        </div>
+        <div class="bg-card-elevated p-6 rounded-lg border border-border-dark">
+            <h3 class="text-xl font-bold text-white flex items-center gap-2"><i class="ph-bold ph-info text-sky-400"></i>AI Verdict</h3>
+            <p class="text-slate-300 mt-2" id="summary-verdict"></p>
+        </div>
+     </div>
+  </template>
+
+  <template id="ai-best-value-template">
+     <div class="p-4 sm:p-8 relative">
+        <button onclick="closeModal()" class="fixed top-6 left-8 text-white bg-black/30 backdrop-blur-sm hover:bg-black/50 p-3 rounded-full z-50 transition-colors">
+            <i class="ph-bold ph-arrow-left text-2xl"></i>
+        </button>
+        <div class="text-center mb-8">
+            <h2 class="text-3xl font-bold text-white">AI Best Value Analysis</h2>
+              <p class="text-slate-400 mt-2" id="best-value-location"></p>
+        </div>
+
+        <div class="text-center mb-8">
+            <p class="text-lg text-slate-400">AI Value Rating</p>
+            <p class="text-5xl font-extrabold" id="best-value-rating">Excellent</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+            <div class="bg-card-elevated p-6 rounded-lg border border-border-dark text-center">
+                <h4 class="font-semibold text-slate-400">Listing Price</h4>
+                <p class="text-3xl font-bold text-white" id="best-value-listing-price"></p>
+            </div>
+              <div class="bg-card-elevated p-6 rounded-lg border border-border-dark text-center">
+                <h4 class="font-semibold text-slate-400">AI Estimated Market Value</h4>
+                <p class="text-3xl font-bold text-white" id="best-value-estimated-price"></p>
+            </div>
+        </div>
+        
+        <div class="bg-card-elevated p-6 rounded-lg border border-border-dark">
+            <h3 class="text-xl font-bold text-white flex items-center gap-2"><i class="ph-bold ph-chart-bar text-amber-400"></i>Analysis Breakdown</h3>
+            <div class="text-slate-300 mt-2 prose prose-invert max-w-none" id="best-value-analysis"></div>
+        </div>
+     </div>
+  </template>
+  <template id="role-selection-template">
+    <div class="p-4 text-center">
+      <h2 class="text-3xl font-bold text-white">Welcome to Avas!</h2>
+      <p class="text-slate-400 mt-2 mb-8">To personalize your experience, please choose your role.</p>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="role-card" data-role="buyer">
+          <i class="ph-bold ph-magnifying-glass text-4xl text-sky-400"></i>
+          <h3 class="text-xl font-bold mt-2 text-white">Buyer</h3>
+          <p class="text-sm text-slate-400">I'm looking to find and purchase plots or land.</p>
+        </div>
+            <div class="role-card" data-role="seller">
+          <i class="ph-bold ph-house text-4xl text-amber-400"></i>
+          <h3 class="text-xl font-bold mt-2 text-white">Seller / Owner</h3>
+          <p class="text-sm text-slate-400">I want to list and sell my own property.</p>
+        </div>
+            <div class="role-card" data-role="agent">
+          <i class="ph-bold ph-briefcase text-4xl text-indigo-400"></i>
+          <h3 class="text-xl font-bold mt-2 text-white">Agent</h3>
+          <p class="text-sm text-slate-400">I'm a real estate professional listing multiple properties.</p>
+        </div>
+      </div>
+    </div>
+  </template>
+<template id="dashboard-template">
+<div class="relative w-full h-full bg-slate-900/50 p-4 sm:p-8 pl-36 sm:pl-32 overflow-y-auto">
+            <button id="dashboard-close-btn" class="fixed top-6 left-8 text-white bg-black/30 backdrop-blur-sm hover:bg-black/50 p-3 rounded-full z-50 transition-colors">
+            <i class="ph-bold ph-arrow-left text-2xl"></i>
+        </button>
+
+        <div class="max-w-7xl mx-auto">
+            <div class="mb-8">
+                <h2 class="text-3xl font-bold text-white">My Dashboard</h2>
+                <p class="text-slate-400 mt-1">Here's a summary of your activity on Avas.</p>
+            </div>
+
+            <div class="bg-card-elevated p-6 rounded-lg border border-border-dark flex items-center gap-6 mb-8">
+                <img id="db-user-avatar" src="" class="w-20 h-20 rounded-full object-cover border-2 border-indigo-500">
+                <div>
+                    <h3 id="db-user-name" class="text-2xl font-bold text-white">User Name</h3>
+                    <p id="db-user-email" class="text-slate-400">user@example.com</p>
+                    <div class="flex items-center justify-between mt-1">
+                    <p class="text-slate-400 flex items-center gap-2">
+                        <i class="ph-bold ph-phone text-slate-500"></i>
+                        <span id="db-user-phone">No phone number</span>
+                    </p>
+                    <button id="db-edit-phone-btn" class="text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1">
+                        <i class="ph-bold ph-pencil-simple"></i>
+                        Edit
+                    </button>
+                </div>
+                    <p id="db-user-role" class="mt-2 inline-block bg-indigo-500/20 text-indigo-300 text-sm font-semibold px-3 py-1 rounded-full capitalize">Role</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <div class="bg-card-elevated p-6 rounded-lg border border-border-dark flex items-center gap-4">
+                    <div class="bg-indigo-500/10 text-indigo-400 p-3 rounded-full"><i class="ph-bold ph-house text-2xl"></i></div>
+                    <div>
+                        <p class="text-sm text-slate-400">Total Listings</p>
+                        <p id="db-total-listings" class="text-2xl font-bold text-white">0</p>
+                    </div>
+                </div>
+                <div class="bg-card-elevated p-6 rounded-lg border border-border-dark flex items-center gap-4">
+                    <div class="bg-green-500/10 text-green-400 p-3 rounded-full"><i class="ph-bold ph-tag text-2xl"></i></div>
+                    <div>
+                        <p class="text-sm text-slate-400">Total Listing Value</p>
+                        <p id="db-total-value" class="text-2xl font-bold text-white">₹0</p>
+                    </div>
+                </div>
+                <div class="bg-card-elevated p-6 rounded-lg border border-border-dark flex items-center gap-4">
+                    <div class="bg-sky-500/10 text-sky-400 p-3 rounded-full"><i class="ph-bold ph-shield-check text-2xl"></i></div>
+                    <div>
+                        <p class="text-sm text-slate-400">Verified Listings</p>
+                        <p id="db-verified-listings" class="text-2xl font-bold text-white">0 / 0</p>
+                    </div>
+                </div>
+                <div class="bg-card-elevated p-6 rounded-lg border border-border-dark flex items-center gap-4">
+                    <div class="bg-amber-500/10 text-amber-400 p-3 rounded-full"><i class="ph-bold ph-star text-2xl"></i></div>
+                    <div>
+                        <p class="text-sm text-slate-400">Current Plan</p>
+                        <p id="db-current-plan" class="text-2xl font-bold text-white capitalize">Free</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div class="lg:col-span-2 bg-card-elevated p-6 rounded-lg border border-border-dark">
+                    <h3 class="text-xl font-bold text-white mb-4">Recent Listings</h3>
+                    <div id="db-recent-listings" class="space-y-3">
+                        <p class="text-slate-500 text-center py-8">No listings yet.</p>
+                    </div>
+                </div>
+
+                <div class="bg-card-elevated p-6 rounded-lg border border-border-dark">
+                    <h3 class="text-xl font-bold text-white mb-4">Listings by City</h3>
+                    <div class="h-80">
+                        <canvas id="db-listings-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+  </template>
+  <template id="edit-plot-template">
+    <form id="edit-plot-form" class="space-y-5 max-w-lg mx-auto">
+        <input type="hidden" id="edit-plot-id" name="plot_id">
+        <div>
+            <label for="edit-location" class="form-label">Location Name</label>
+            <input type="text" id="edit-location" name="location" class="form-input" required>
+        </div>
+        <div>
+            <label for="edit-city" class="form-label">City</label>
+            <input type="text" id="edit-city" name="city" class="form-input" required>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label for="edit-area_sqft" class="form-label">Area (sqft)</label>
+                <input type="number" id="edit-area_sqft" name="area_sqft" class="form-input" required>
+            </div>
+            <div>
+                <label for="edit-price" class="form-label">Price</label>
+                 <div class="relative">
+                    <span class="absolute top-1/2 left-4 -translate-y-1/2 text-slate-400 font-bold">₹</span>
+                    <input type="text" id="edit-price" name="price" class="form-input pl-9" placeholder="e.g., 75 Lakhs" required>
+                </div>
+            </div>
+        </div>
+        <button type="submit" class="w-full mt-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors flex items-center justify-center">
+            <i class="ph-bold ph-floppy-disk mr-2"></i>
+            Save Changes
+        </button>
+    </form>
+</template>
+<template id="complete-profile-template">
+    <div class="p-4 text-center">
+      <h2 class="text-3xl font-bold text-white">One Last Step!</h2>
+      <p class="text-slate-400 mt-2 mb-8">Please provide your mobile number to complete your profile.</p>
+      <form id="complete-profile-form" class="max-w-xs mx-auto space-y-4">
+          <div>
+              <label for="profile-mobile" class="font-semibold text-slate-300 sr-only">Mobile Number</label>
+              <div class="relative mt-2">
+                  <i class="ph-bold ph-phone form-input-icon"></i>
+                  <input type="tel" id="profile-mobile" placeholder="98765 43210" class="form-input pl-12 text-center" required>
+              </div>
+          </div>
+          <p id="profile-message" class="text-center text-red-400 text-sm h-5"></p>
+          <button type="submit" id="save-profile-btn" class="w-full py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">Save Profile</button>
+      </form>
+    </div>
+  </template>
+</body>
+</html>

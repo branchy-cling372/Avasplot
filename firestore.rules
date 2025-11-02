@@ -1,0 +1,23 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // This rule applies to the 'plots' collection
+    match /plots/{plotId} {
+      // Allow ANYONE to read (get) and list all plot documents.
+      // This is necessary for the main page to show listings to all users.
+      allow read;
+
+      // Allow only AUTHENTICATED users to create new listings.
+      allow create: if request.auth != null;
+
+      // Allow a user to UPDATE or DELETE only their OWN listings.
+      allow update, delete: if request.auth != null && request.auth.uid == resource.data.owner_id;
+    }
+    
+    // This rule protects user data
+    match /users/{userId} {
+    	// A user can only read and write their own personal data.
+    	allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

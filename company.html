@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="color-scheme" content="dark"/>
+  <title>Company Information - Avas</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <style>
+    :root {
+      --brand-primary: #6366f1; /* Indigo 500 */
+      --brand-secondary: #f59e0b; /* Amber 500 */
+      --bg-dark: #05070D;
+      --text-light: #e2e8f0; /* Slate 200 */
+      --text-muted: #94a3b8; /* Slate 400 */
+      --card-dark: #0b1220;
+      --card-elevated: #0f172a; /* Slate 900 */
+      --border-dark: #1e293b; /* Slate 800 */
+      --brand-glow: rgba(99, 102, 241, 0.5);
+    }
+    html { scroll-behavior: smooth; }
+    body { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background-color: var(--bg-dark); color: var(--text-light); -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    /* Updated prose styles */
+    .prose-invert h1, .prose-invert h2, .prose-invert h3 { color: white; margin-bottom: 0.75em; }
+    .prose-invert p { color: var(--text-muted); margin-bottom: 1em; line-height: 1.6; }
+    .prose-invert ul { padding-left: 1.5em; list-style: disc; }
+    .prose-invert ul li { color: var(--text-muted); margin-bottom: 0.5em; }
+    .prose-invert em { color: var(--text-muted); font-style: italic;}
+
+    .form-input { width: 100%; padding: .75rem 1rem; background-color: var(--card-elevated); border: 1px solid var(--border-dark); color: var(--text-light); border-radius: .5rem; transition: border-color .15s ease, box-shadow .15s ease; }
+    .form-input:focus { outline: none; border-color: var(--brand-primary); box-shadow: 0 0 0 3px var(--brand-glow); }
+    .form-label { display: block; font-size: 0.875rem; font-weight: 600; color: var(--text-light); margin-bottom: 0.5rem; }
+    .submit-button-gradient { width: 100%; padding: 0.875rem 0; border-radius: 0.5rem; color: white; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 0.5rem; background-image: linear-gradient(to right, #4f46e5, #6366f1, #818cf8); transition: all 0.2s ease; background-size: 200% auto; border: none; cursor: pointer; }
+    .submit-button-gradient:hover { box-shadow: 0 10px 20px -10px rgba(99, 102, 241, 0.6); background-position: right center; }
+    .submit-button-gradient:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Tab Styles */
+    .tab-link {
+        padding: 0.75rem 1.5rem;
+        border-bottom: 3px solid transparent;
+        color: var(--text-muted);
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        background: none; /* Ensure button background is transparent */
+        border-top: none; /* Remove potential default borders */
+        border-left: none;
+        border-right: none;
+    }
+    .tab-link:hover {
+        color: var(--text-light);
+    }
+    .tab-link.active {
+        color: var(--brand-primary);
+        border-bottom-color: var(--brand-primary);
+    }
+    .tab-panel {
+        display: none; /* Hidden by default */
+    }
+    .tab-panel.active {
+        display: block; /* Shown when active */
+    }
+  </style>
+</head>
+<body class="antialiased">
+
+  <header class="sticky top-0 z-40 bg-card-dark/70 backdrop-blur-lg border-b border-border-dark">
+    <nav class="container mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-20">
+        <div class="flex-shrink-0 flex items-center space-x-3">
+          <i class="ph-bold ph-map-trifold text-4xl text-white"></i>
+          <a href="avas.html" class="text-3xl font-extrabold text-white">Avas</a>
+        </div>
+        <div>
+          <a href="avas.html" class="px-4 py-2 text-sm font-semibold bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors flex items-center gap-2">
+            <i class="ph-bold ph-arrow-left"></i> Back to Site
+          </a>
+        </div>
+      </div>
+    </nav>
+  </header>
+
+  <main class="container mx-auto px-4 sm:px-6 lg:px-8 py-16">
+    <div class="bg-card-dark rounded-lg border border-border-dark">
+        <div id="tab-nav" class="flex flex-wrap border-b border-border-dark"> <button class="tab-link" data-tab="terms">Terms of Service</button>
+            <button class="tab-link" data-tab="privacy">Privacy Policy</button>
+            <button class="tab-link" data-tab="about">About Us</button>
+            <button class="tab-link" data-tab="contact">Contact Us</button>
+        </div>
+
+        <div class="p-8 md:p-12">
+            <div id="terms" class="tab-panel prose prose-invert max-w-none">
+                <h1>Terms of Service</h1>
+                <h2>1. Acceptance of Terms</h2>
+                <p>By accessing and using Avas ("the Service"), you accept and agree to be bound by the terms and provision of this agreement. This is placeholder text. You should replace this with your full Terms of Service.</p>
+                <h2>2. Use of Service</h2>
+                <p>The Service is provided for personal, non-commercial use, or for use as a registered agent/builder. You agree not to misuse the Service. All AI-generated content (summaries, Vastu scores, price trends) is for informational purposes only and does not constitute financial or legal advice.</p>
+                <h2>3. User-Generated Content</h2>
+                <p>As a seller or agent, you are responsible for the accuracy and legality of the information you upload, including plot details, images, and verification documents. We reserve the right to remove any content that violates our policies.</p>
+                <h2>4. Disclaimers and Limitation of Liability</h2>
+                <p>The Service is provided "as is". Avas makes no warranties, expressed or implied. In no event shall Avas be liable for any damages arising out of the use or inability to use the materials on Avas's website.</p>
+                <p><em>This is not legal advice. Please consult a legal professional to draft your official Terms of Service.</em></p>
+            </div>
+
+            <div id="privacy" class="tab-panel prose prose-invert max-w-none">
+                <h1>Privacy Policy</h1>
+                <h2>1. Information We Collect</h2>
+                <p>We collect information you provide directly to us, such as when you create an account (name, email, phone) and list a property (documents like Aadhaar or 7/12 extracts for verification).</p>
+                <h2>2. How We Use Information</h2>
+                <p>Your information is used to:</p>
+                <ul>
+                    <li>Provide, maintain, and improve our Service.</li>
+                    <li>Create and manage your account and listings.</li>
+                    <li>Communicate with you and respond to inquiries.</li>
+                    <li>Anonymously improve our AI models.</li>
+                </ul>
+                <h2>3. Information Sharing</h2>
+                <p>We do not sell your personal data. We may share information as follows:</p>
+                <ul>
+                    <li>With other users, if you are on a premium plan and they wish to contact you (e.g., sharing your contact details with a potential buyer).</li>
+                    <li>With your consent or for legal reasons.</li>
+                </ul>
+                <p><em>This is not a complete Privacy Policy. Please consult a legal professional to draft one that is compliant with all applicable laws.</em></p>
+            </div>
+
+            <div id="about" class="tab-panel prose prose-invert max-w-none">
+                <div class="text-center">
+                    <i class="ph-bold ph-map-trifold text-6xl text-indigo-400"></i>
+                    <h1 class="mt-4">About Avas</h1>
+                    <p class="text-lg text-slate-300 mt-2 max-w-2xl mx-auto">Avas is a next-generation real estate platform designed to make finding and selling land simple, transparent, and intelligent.</p>
+                </div>
+                <div class="mt-8">
+                    <h3>Our Mission</h3>
+                    <p>Our mission is to empower buyers, sellers, and agents with powerful AI-driven insights. We believe that buying land is one of the most significant decisions a person can make, and it should be supported by the best data possible. We analyze thousands of listings, provide Vastu scores, predict market trends, and verify listings to build a foundation of trust in the digital real estate market.</p>
+                    <h3>What We Do</h3>
+                    <ul>
+                        <li><strong>AI-Powered Insights:</strong> We use generative AI to summarize listings, compare properties, and analyze value.</li>
+                        <li><strong>Trusted Verification:</strong> Our AI-assisted document verification process helps filter out fraudulent listings, giving buyers peace of mind.</li>
+                        <li><strong>Nationwide Search:</strong> Avas aggregates listings from all over the nation, providing a single, powerful search experience.</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div id="contact" class="tab-panel">
+                <div class="text-center mb-8">
+                    <i class="ph-bold ph-paper-plane-tilt text-5xl text-indigo-400"></i>
+                    <h2 class="text-3xl font-bold text-white mt-2">Get in Touch</h2>
+                    <p class="text-slate-400 mt-2 max-w-2xl mx-auto">Have a question, feedback, or a partnership inquiry? We'd love to hear from you.</p>
+                </div>
+                <form id="contact-form" class="max-w-2xl mx-auto space-y-6">
+                    <div class="p-6 bg-card-elevated rounded-lg border border-border-dark space-y-5">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5">
+                            <div>
+                                <label for="contact_name" class="form-label">Your Full Name</label>
+                                <input type="text" id="contact_name" name="contact_name" class="form-input" placeholder="e.g., Jane Doe" required>
+                            </div>
+                            <div>
+                                <label for="contact_email" class="form-label">Email Address</label>
+                                <div class="relative">
+                                    <i class="ph-bold ph-envelope absolute top-1/2 left-4 -translate-y-1/2 text-slate-400"></i>
+                                    <input type="email" id="contact_email" name="contact_email" class="form-input pl-12" placeholder="e.g., jane.doe@example.com" required>
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <label for="subject" class="form-label">Subject</label>
+                            <input type="text" id="subject" name="subject" class="form-input" placeholder="e.g., Feedback" required>
+                        </div>
+                        <div>
+                            <label for="description" class="form-label">Your Message</label>
+                            <textarea id="description" name="description" rows="4" class="form-input" placeholder="Your message..." required></textarea> </div>
+                    </div>
+                    <div id="contact-feedback" class="text-center text-sm h-5 mb-4"></div>
+                    <div>
+                        <button type="submit" id="contact-submit-btn" class="submit-button-gradient"> <i class="ph-bold ph-paper-plane-tilt mr-2"></i> Send Message
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+        </div>
+    </div>
+  </main>
+
+  <script type="module">
+    // --- ADDED FIREBASE IMPORTS ---
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+    // --- ADDED FIREBASE CONFIG ---
+    // Make sure this matches your project's configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyDJ83sXD54rAmhw3XtkZwioI_lvw75BxU4", // Replace with your actual config if different
+      authDomain: "avas-845aa.firebaseapp.com",
+      databaseURL: "https://avas-845aa-default-rtdb.firebaseio.com",
+      projectId: "avas-845aa",
+      storageBucket: "avas-845aa.appspot.com",
+      messagingSenderId: "1058171170402",
+      appId: "1:1058171170402:web:4e421d16f1ae2bfbddab3b",
+      measurementId: "G-F9WF2PYEVN"
+    };
+
+    // --- ADDED FIREBASE INITIALIZATION ---
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // --- EXISTING TAB LOGIC (UNCHANGED) ---
+    document.addEventListener('DOMContentLoaded', () => {
+      const tabs = document.querySelectorAll('.tab-link');
+      const panels = document.querySelectorAll('.tab-panel');
+      const tabNav = document.getElementById('tab-nav');
+
+      function setActiveTab(tabName) {
+        tabs.forEach(tab => {
+          tab.classList.toggle('active', tab.dataset.tab === tabName);
+        });
+        panels.forEach(panel => {
+          panel.classList.toggle('active', panel.id === tabName);
+        });
+      }
+
+      tabNav.addEventListener('click', (e) => {
+        if (e.target.matches('.tab-link')) {
+          const tabName = e.target.dataset.tab;
+          setActiveTab(tabName);
+          history.pushState(null, null, `#${tabName}`);
+        }
+      });
+
+      const currentHash = window.location.hash.substring(1);
+      if (currentHash && document.getElementById(currentHash)) {
+        setActiveTab(currentHash);
+      } else {
+        setActiveTab('terms');
+      }
+
+      // --- UPDATED CONTACT FORM LOGIC ---
+      const contactForm = document.getElementById('contact-form');
+      const submitBtn = document.getElementById('contact-submit-btn');
+      const feedbackEl = document.getElementById('contact-feedback');
+
+      if (contactForm && submitBtn && feedbackEl) { // Check if elements exist
+        contactForm.addEventListener('submit', async (e) => { // Added async
+          e.preventDefault();
+
+          // Disable button and show loading state
+          submitBtn.disabled = true;
+          submitBtn.innerHTML = '<div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mx-auto"></div>';
+          feedbackEl.textContent = ''; // Clear previous feedback
+          feedbackEl.classList.remove('text-red-400', 'text-green-400');
+
+          try {
+            // Get form data using IDs
+            const name = document.getElementById('contact_name').value;
+            const email = document.getElementById('contact_email').value;
+            const subject = document.getElementById('subject').value;
+            const message = document.getElementById('description').value; // Using 'description' ID as in your HTML
+
+            // Validate fields aren't empty (basic validation)
+            if (!name || !email || !subject || !message) {
+              throw new Error("Please fill out all fields.");
+            }
+
+            // Save to 'feedback' collection in Firestore
+            await addDoc(collection(db, 'feedback'), {
+              name: name,
+              email: email,
+              subject: subject,
+              message: message,
+              submittedAt: serverTimestamp()
+            });
+
+            feedbackEl.textContent = 'Message sent successfully!';
+            feedbackEl.classList.add('text-green-400');
+            contactForm.reset(); // Clear the form
+
+          } catch (error) {
+            console.error("Error sending feedback:", error);
+            feedbackEl.textContent = error.message || 'Failed to send message. Please try again.'; // Show specific error if available
+            feedbackEl.classList.add('text-red-400');
+          } finally {
+            // Re-enable button and restore text
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="ph-bold ph-paper-plane-tilt mr-2"></i> Send Message';
+          }
+        });
+      } else {
+        console.error("Contact form elements not found!"); // Add error message if form elements are missing
+      }
+    });
+  </script>
+
+</body>
+</html>
